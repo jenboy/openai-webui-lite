@@ -3579,6 +3579,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                     .replace('Deepseek', 'DeepSeek')
                     .replace('Glm', 'GLM')
                     .replace('Gpt', 'GPT')
+                    .replace(' Cc', 'CC')
                     .replace('Or/', 'OR/')
                     .replace('Cs/', 'CS/')
                     .replace('Iflow/', 'iFlow/')
