@@ -2381,6 +2381,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       }
 
       .content-section > h4 {
+        position: relative;
         margin: 0 0 10px 0;
         color: #495057;
         font-size: 14px;
@@ -2388,6 +2389,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         align-items: center;
         justify-content: space-between;
         white-space: nowrap;
+        overflow: hidden;
       }
 
       .content-section > h4 small {
