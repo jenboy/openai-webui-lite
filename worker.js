@@ -1577,6 +1577,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         height: 100vh;
         display: flex;
         gap: 20px;
+        transition: max-width 0.2s;
       }
 
       .container.wide {
