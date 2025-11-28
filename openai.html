@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#605bec" />
     <meta name="description" content="OpenAI Chat - 智能对话助手" />
-    <meta http-equiv="Content-Language" content="zh-CN">
+    <meta http-equiv="Content-Language" content="zh-CN" />
     <title>OpenAI Chat</title>
 
     <!-- Favicon -->
@@ -1392,18 +1392,18 @@
             </div>
             <div class="tool-btns">
               <button
-                v-if="currentSession && currentSession.answer && !isLoading && !isStreaming"
-                class="tool-btn share-btn"
-                @click="shareSession"
-              >
-                📸 分享
-              </button>
-              <button
                 v-if="isPC"
                 class="tool-btn wide-btn"
                 @click="toggleWideMode"
               >
                 {{ isWideMode ? '› 收窄 ‹' : '‹ 加宽 ›' }}
+              </button>
+              <button
+                v-if="currentSession && currentSession.answer && !isLoading && !isStreaming"
+                class="tool-btn share-btn"
+                @click="shareSession"
+              >
+                📸 分享
               </button>
             </div>
           </div>
