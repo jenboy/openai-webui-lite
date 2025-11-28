@@ -1578,6 +1578,10 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         gap: 20px;
       }
 
+      .container.wide {
+        max-width: 1600px;
+      }
+
       .sidebar {
         width: 300px;
         background: rgba(255, 255, 255, 0.95);
@@ -1697,12 +1701,21 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         user-select: none;
       }
 
-      .header .share-btn {
+      .header .tool-btns {
         position: absolute;
+        display: flex;
         top: 0;
         bottom: 0;
         right: 14px;
+        width: 10em;
+        height: 32px;
         margin: auto 0;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .header .tool-btn {
         height: 32px;
         background: rgba(255, 255, 255, 0.3);
         backdrop-filter: saturate(180%) blur(16px);
@@ -1714,7 +1727,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         font-size: 12px;
       }
 
-      .header .share-btn:hover {
+      .header .tool-btn:hover {
         background: rgba(255, 255, 255, 0.7);
         border-color: #a8edea;
         color: #2d3748;
@@ -2543,7 +2556,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         v-cloak
         @click="hideSidebar"
       ></div>
-      <div class="container">
+      <div class="container" :class="{ wide: isWideMode }">
         <!-- 侧边栏 -->
         <div
           v-show="true"
@@ -2702,13 +2715,22 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 <span>联网搜索</span>
               </label>
             </div>
-            <button
-              v-if="currentSession && currentSession.answer && !isLoading && !isStreaming"
-              class="share-btn"
-              @click="shareSession"
-            >
-              📸 分享
-            </button>
+            <div class="tool-btns">
+              <button
+                v-if="currentSession && currentSession.answer && !isLoading && !isStreaming"
+                class="tool-btn share-btn"
+                @click="shareSession"
+              >
+                📸 分享
+              </button>
+              <button
+                v-if="isPC"
+                class="tool-btn wide-btn"
+                @click="toggleWideMode"
+              >
+                {{ isWideMode ? '» 收窄 «' : '« 加宽 »' }}
+              </button>
+            </div>
           </div>
           <!-- 消息区域 -->
           <div class="messages-container" ref="messagesContainer">
@@ -3250,7 +3272,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             isCapturing: false,
             globalRolePrompt: '',
             globalRolePromptEnabled: true,
-            isMobile: window.innerWidth <= 768,
+            isMobile: window.innerWidth <= 768, // 是否移动设备
+            isWideMode: !!localStorage.getItem('wideMode'),
             showSidebar: false,
             isStreaming: false,
             streamingContent: '',
@@ -3492,6 +3515,21 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             };
 
             return Swal.fire(options);
+          },
+
+          // 切换PC宽屏模式
+          toggleWideMode(flag = undefined) {
+            this.isWideMode = !this.isWideMode;
+            if (flag === true) {
+              this.isWideMode = true;
+            } else if (flag === false) {
+              this.isWideMode = false;
+            }
+            if (this.isWideMode) {
+              localStorage.setItem('wideMode', '1');
+            } else {
+              localStorage.removeItem('wideMode');
+            }
           },
 
           initTomSelect() {
@@ -4119,6 +4157,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             this.isMobile = isUaMobile || isSizeMobile;
             if (this.isMobile) {
               document.body.className = 'mobile';
+              this.toggleWideMode(false);
               return true;
             } else {
               document.body.className = 'pc';
@@ -4288,7 +4327,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 const isWechat =
                   userAgent.includes('micromessenger') &&
                   userAgent.includes('mobile');
-                const isMobile = this.checkMobile();
+                const isMobile = this.isMobile;
                 const imageDataUrl = canvas.toDataURL('image/png');
                 this.showSwal({
                   title: isMobile ? '长按保存图片' : '右键复制图片',
@@ -4440,7 +4479,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             this.isLoading = true;
             this.isStreaming = false;
             this.isSentForAWhile = false;
-            this.sleep(2000).then(() => {
+            this.sleep(2500).then(() => {
               this.isSentForAWhile = true;
             });
             this.streamingContent = '';
@@ -5067,7 +5106,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
           // 显示关于信息
           showAbout() {
-            const isMobile = this.checkMobile();
+            const isMobile = this.isMobile;
             const template = this.$refs.aboutTemplate;
             if (!template) return;
             const htmlContent = template.innerHTML;
