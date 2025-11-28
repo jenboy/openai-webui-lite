@@ -2228,9 +2228,10 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           gap: 10px;
         }
 
-        .header .share-btn {
+        .header .tool-btns {
           top: 16px;
           bottom: auto;
+          width: 64px;
           margin: 0;
         }
 
