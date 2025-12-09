@@ -3433,7 +3433,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                   }
                 },
                 renderer(token) {
-                  return `<strong>${token.text}</strong>`;
+                  return '<strong>' + token.text + '</strong>';
                 }
               }
             ]
