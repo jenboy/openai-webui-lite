@@ -3335,7 +3335,7 @@
                 messages.push({
                   role: 'assistant',
                   content:
-                    'AI模型通过实时调用Tavily搜索引擎，找到了以下信息: \\n\\n' +
+                    'AI模型通过实时调用Tavily搜索引擎，找到了以下相关信息: \\n\\n' +
                     '<Tavily_Search_Context>' +
                     JSON.stringify(searchResList) +
                     '</Tavily_Search_Context>'
@@ -3347,7 +3347,7 @@
                     new Date().toDateString() +
                     ' ' +
                     new Date().toTimeString() +
-                    '。你无需针对“用户澄清真实时间”这件事做出任何提及和表态，请专注于核心问题的解答。\\n\\n' +
+                    '，请据此推断"最近"、"今年"等时间词的具体含义。\\n你无需针对“用户澄清真实时间”这件事做出任何提及和表态，请专注于核心问题的解答。\\n\\n' +
                     '## 严格执行原则 (Critical Rules)\\n' +
                     '### 1. 事实基准 (Grounding)\\n' +
                     '*   **优先权**：搜索语料的权重 **高于** 你的内部训练知识。如果搜索结果与你的记忆冲突（特别是时效性信息），**必须**以搜索结果为准。\\n' +
@@ -3376,7 +3376,7 @@
                     query +
                     '\\n' +
                     '</User_Question>\\n\\n' +
-                    '现在你的任务是基于上述提供的**实时搜索结果**（Tavily Search Context），回答用户的原始问题。你需要像撰写深度调查报告一样，将碎片化的信息拼凑成完整的逻辑链条。'
+                    '现在你的任务是基于上述提供的**实时搜索结果**（Tavily_Search_Context），回答用户的原始问题。你需要像撰写深度调查报告一样，将碎片化的信息拼凑成完整的逻辑链条。'
                 });
                 // 显示搜索结果数量（如果有）
                 if (searchQueries.length && !this.streamingContent) {
