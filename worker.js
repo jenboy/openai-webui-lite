@@ -1706,8 +1706,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             // 设置加载状态
             if (window.app) window.app.isLoadingRemoteSessions = true;
             try {
-              // 1分钟内的缓存有效
-              const timestamp = Math.floor(Date.now() / 1000 / 60);
+              // 90秒内的缓存有效
+              const timestamp = Math.floor(Date.now() / 1000 / 90);
               var remoteData = await this.webdavGet(
                 'sessions.json?v=' + timestamp
               );
