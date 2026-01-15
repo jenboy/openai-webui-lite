@@ -4225,7 +4225,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 }
               },
               preConfirm: () => {
-                console.log('pre-confirm');
                 const isValid = this.validateAndSaveSettings();
                 if (isValid) {
                   this.isShowSettingsModal = false;
