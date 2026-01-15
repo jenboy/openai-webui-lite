@@ -1449,7 +1449,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       // 全局实例
       window.openaiDB = new OpenaiDB();
     </script>
-    <!-- CSS -->
+    <!-- CSS: style.css -->
     <style>
       * {
         margin: 0;
@@ -2902,11 +2902,15 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           </div>
           <!-- 输入区域 -->
           <div class="input-area">
-            <!-- 上传的图片标签 -->
-            <div v-if="uploadedImages.length > 0" class="uploaded-images-tags">
+            <!-- 上传的附件标签（图片和文本文件） -->
+            <div
+              v-if="uploadedImages.length > 0 || uploadedPlaintexts.length > 0"
+              class="uploaded-images-tags"
+            >
+              <!-- 图片标签 -->
               <div
                 v-for="(img, index) in uploadedImages"
-                :key="index"
+                :key="'img-' + index"
                 class="image-tag"
               >
                 <img
@@ -2922,12 +2926,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                   ×
                 </button>
               </div>
-            </div>
-            <!-- 上传的文本文件标签 -->
-            <div
-              v-if="uploadedPlaintexts.length > 0"
-              class="uploaded-images-tags"
-            >
+              <!-- 文本文件标签 -->
               <div
                 v-for="(txt, index) in uploadedPlaintexts"
                 :key="'txt-' + index"
@@ -4058,6 +4057,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               confirmButtonText: '📷 图片',
               denyButtonText: '📄 文本文件',
               cancelButtonText: '取消',
+              confirmButtonColor: '#5fbdbd',
+              denyButtonColor: '#9b8ed4',
               reverseButtons: false
             }).then(result => {
               if (result.isConfirmed) {
