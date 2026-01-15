@@ -3040,7 +3040,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             @click="createNewSession"
             class="new-session-btn"
           >
-            + 新建会话
+            ➕ 新建会话
           </button>
           <!-- 会话列表 -->
           <div class="sessions">
