@@ -3732,6 +3732,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 type="password"
                 id="webdavPassword"
                 placeholder="密码"
+                autocomplete="new-password"
                 style="
                   width: 100%;
                   padding: 8px 12px;
