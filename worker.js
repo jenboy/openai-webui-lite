@@ -2951,11 +2951,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         >
           <!-- 设置按钮 -->
           <div class="settings-section">
-            <button
-              class="settings-btn"
-              @click="openSettingsModal()"
-              @dblclick.stop="reloadPage()"
-            >
+            <button class="settings-btn" @click="openSettingsModal()">
               ⚙️ 设置
               <span v-if="!apiKey" style="color: #e74c3c; margin-left: 4px"
                 >(未配置)</span
@@ -3645,6 +3641,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           <!-- API Key 设置 -->
           <div style="margin-bottom: 20px">
             <label
+              class="label-api-key"
               style="
                 display: block;
                 margin-bottom: 8px;
@@ -4308,6 +4305,13 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 if (testBtn) {
                   testBtn.addEventListener('click', () => {
                     this.testWebDAVFromModal();
+                  });
+                }
+
+                var label = $('.label-api-key');
+                if (label) {
+                  label.addEventListener('dblclick', () => {
+                    this.reloadPage();
                   });
                 }
               },
