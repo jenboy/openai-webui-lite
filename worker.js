@@ -4320,7 +4320,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                   });
                 }
 
-                var title = $('.swal2-modal.swal2-show .swal2-title');
+                var title = $('.swal2-modal .swal2-title');
                 if (title) {
                   title.addEventListener('dblclick', () => {
                     this.reloadPage();
