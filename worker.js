@@ -687,6 +687,10 @@ ${truncatedAnswer}
 
     // 构建转发请求的 headers
     const forwardHeaders = new Headers();
+
+    // 添加标准 User-Agent，避免某些服务器拒绝空或异常的 UA
+    forwardHeaders.set('User-Agent', 'WebDAV-Client/1.0');
+
     if (webdavAuth) {
       forwardHeaders.set('Authorization', webdavAuth);
     }
