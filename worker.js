@@ -549,90 +549,6 @@ async function handleRequest(request, env = {}) {
     });
   }
 
-  // WebDAV 代理接口 - 解决跨域问题
-  if (apiPath === '/webdav' || apiPath.startsWith('/webdav/')) {
-    // 从请求头获取 WebDAV 配置
-    const webdavUrl = request.headers.get('X-WebDAV-URL');
-    const webdavAuth = request.headers.get('X-WebDAV-Auth');
-
-    if (!webdavUrl) {
-      return createErrorResponse('Missing X-WebDAV-URL header', 400);
-    }
-
-    // 构建目标 URL
-    // 如果路径是 /webdav/xxx，则将 /xxx 附加到 webdavUrl
-    let targetUrl = webdavUrl;
-    if (apiPath.startsWith('/webdav/')) {
-      const subPath = apiPath.substring(7); // 移除 '/webdav'
-      targetUrl = webdavUrl.replace(/\/$/, '') + subPath;
-    }
-
-    // 构建转发请求的 headers
-    const forwardHeaders = new Headers();
-    if (webdavAuth) {
-      forwardHeaders.set('Authorization', webdavAuth);
-    }
-
-    // 复制某些必要的请求头
-    const contentType = request.headers.get('Content-Type');
-    if (contentType) {
-      forwardHeaders.set('Content-Type', contentType);
-    }
-
-    // PROPFIND 需要 Depth 头
-    const depth = request.headers.get('Depth');
-    if (depth) {
-      forwardHeaders.set('Depth', depth);
-    }
-
-    try {
-      // 转发请求到 WebDAV 服务器
-      const webdavResponse = await fetch(targetUrl, {
-        method: apiMethod,
-        headers: forwardHeaders,
-        body: ['GET', 'HEAD', 'OPTIONS'].includes(apiMethod)
-          ? undefined
-          : await request.text()
-      });
-
-      // 构建响应头，添加 CORS 头
-      const responseHeaders = new Headers(webdavResponse.headers);
-      responseHeaders.set('Access-Control-Allow-Origin', '*');
-      responseHeaders.set(
-        'Access-Control-Allow-Methods',
-        'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS'
-      );
-      responseHeaders.set(
-        'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth'
-      );
-
-      return new Response(webdavResponse.body, {
-        status: webdavResponse.status,
-        statusText: webdavResponse.statusText,
-        headers: responseHeaders
-      });
-    } catch (error) {
-      console.error('WebDAV proxy error:', error);
-      return createErrorResponse('WebDAV proxy error: ' + error.message, 502);
-    }
-  }
-
-  // 处理 WebDAV 代理的 OPTIONS 预检请求
-  if (apiMethod === 'OPTIONS' && apiPath.startsWith('/webdav')) {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods':
-          'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS',
-        'Access-Control-Allow-Headers':
-          'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth',
-        'Access-Control-Max-Age': '86400'
-      }
-    });
-  }
-
   // 总结会话
   if (apiPath === '/summarize' && apiMethod === 'POST') {
     let apiKey =
@@ -734,6 +650,90 @@ ${truncatedAnswer}
       console.error('Generate summary failed:', error);
       return createErrorResponse('Failed to generate summary', 500);
     }
+  }
+
+  // WebDAV 代理接口 - 解决跨域问题
+  if (apiPath === '/webdav' || apiPath.startsWith('/webdav/')) {
+    // 从请求头获取 WebDAV 配置
+    const webdavUrl = request.headers.get('X-WebDAV-URL');
+    const webdavAuth = request.headers.get('X-WebDAV-Auth');
+
+    if (!webdavUrl) {
+      return createErrorResponse('Missing X-WebDAV-URL header', 400);
+    }
+
+    // 构建目标 URL
+    // 如果路径是 /webdav/xxx，则将 /xxx 附加到 webdavUrl
+    let targetUrl = webdavUrl;
+    if (apiPath.startsWith('/webdav/')) {
+      const subPath = apiPath.substring(7); // 移除 '/webdav'
+      targetUrl = webdavUrl.replace(/\/$/, '') + subPath;
+    }
+
+    // 构建转发请求的 headers
+    const forwardHeaders = new Headers();
+    if (webdavAuth) {
+      forwardHeaders.set('Authorization', webdavAuth);
+    }
+
+    // 复制某些必要的请求头
+    const contentType = request.headers.get('Content-Type');
+    if (contentType) {
+      forwardHeaders.set('Content-Type', contentType);
+    }
+
+    // PROPFIND 需要 Depth 头
+    const depth = request.headers.get('Depth');
+    if (depth) {
+      forwardHeaders.set('Depth', depth);
+    }
+
+    try {
+      // 转发请求到 WebDAV 服务器
+      const webdavResponse = await fetch(targetUrl, {
+        method: apiMethod,
+        headers: forwardHeaders,
+        body: ['GET', 'HEAD', 'OPTIONS'].includes(apiMethod)
+          ? undefined
+          : await request.text()
+      });
+
+      // 构建响应头，添加 CORS 头
+      const responseHeaders = new Headers(webdavResponse.headers);
+      responseHeaders.set('Access-Control-Allow-Origin', '*');
+      responseHeaders.set(
+        'Access-Control-Allow-Methods',
+        'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS'
+      );
+      responseHeaders.set(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth'
+      );
+
+      return new Response(webdavResponse.body, {
+        status: webdavResponse.status,
+        statusText: webdavResponse.statusText,
+        headers: responseHeaders
+      });
+    } catch (error) {
+      console.error('WebDAV proxy error:', error);
+      return createErrorResponse('WebDAV proxy error: ' + error.message, 502);
+    }
+  }
+
+  // 处理 WebDAV 代理的 OPTIONS 预检请求
+  if (apiMethod === 'OPTIONS' && apiPath.startsWith('/webdav')) {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods':
+          'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS',
+        'Access-Control-Allow-Headers':
+          'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth',
+        'Access-Control-Max-Age': '86400'
+      }
+    });
   }
 
   if (!apiPath.startsWith('/v1')) {
@@ -3650,7 +3650,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               <input
                 type="text"
                 id="webdavUrl"
-                placeholder="https://dav.example.com"
+                placeholder="http://dav.test.cn/ (应以'/'结束)"
                 style="
                   width: 100%;
                   padding: 8px 12px;
