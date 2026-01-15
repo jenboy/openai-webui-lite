@@ -765,6 +765,9 @@ ${truncatedAnswer}
         'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth'
       );
 
+      // 移除 WWW-Authenticate 头，避免浏览器弹出原生认证框
+      responseHeaders.delete('WWW-Authenticate');
+
       return new Response(webdavResponse.body, {
         status: webdavResponse.status,
         statusText: webdavResponse.statusText,
