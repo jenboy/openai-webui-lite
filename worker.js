@@ -2059,7 +2059,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
       .settings-section {
         text-align: right;
-        margin-top: 4px;
+        margin-top: 3px;
         margin-bottom: 15px;
       }
 
