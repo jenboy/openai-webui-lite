@@ -1701,12 +1701,18 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         async getItem(key) {
           // 如果是sessions且启用了WebDAV，则从远程读取
           if (key === 'openai_sessions' && this.webdavEnabled) {
-            var remoteData = await this.webdavGet('sessions.json');
-            if (remoteData !== null) {
-              return remoteData;
+            // 设置加载状态
+            if (window.app) window.app.isLoadingRemoteSessions = true;
+            try {
+              var remoteData = await this.webdavGet('sessions.json');
+              if (remoteData !== null) {
+                return remoteData;
+              }
+              // 如果远程没有数据，回退到本地
+              console.log('WebDAV无数据，尝试从本地读取');
+            } finally {
+              if (window.app) window.app.isLoadingRemoteSessions = false;
             }
-            // 如果远程没有数据，回退到本地
-            console.log('WebDAV无数据，尝试从本地读取');
           }
 
           if (!this.db) await this.init();
@@ -2169,6 +2175,32 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         flex: 1;
         overflow-x: hidden;
         overflow-y: auto;
+      }
+
+      .loading-remote-sessions {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 20px;
+        color: #888;
+        font-size: 14px;
+        gap: 12px;
+      }
+
+      .loading-spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid #e0e0e0;
+        border-top-color: #5fbdbd;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
 
       .session-item {
@@ -2996,13 +3028,23 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             </textarea>
           </div>
           <!-- 新建会话按钮 -->
-          <button @click="createNewSession" class="new-session-btn">
+          <button
+            v-if="!isLoadingRemoteSessions"
+            @click="createNewSession"
+            class="new-session-btn"
+          >
             + 新建会话
           </button>
           <!-- 会话列表 -->
           <div class="sessions">
+            <!-- 远程加载中提示 -->
+            <div v-if="isLoadingRemoteSessions" class="loading-remote-sessions">
+              <span class="loading-spinner"></span>
+              <span>正在加载远程数据...</span>
+            </div>
             <div
               v-for="session in sessions"
+              v-show="!isLoadingRemoteSessions"
               :key="session.id"
               @click="switchSession(session.id)"
               :class="['session-item', { active: currentSessionId === session.id }]"
@@ -3870,6 +3912,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             tomSelect: null,
             sidebarHashAdded: false, // 标记是否为侧边栏添加了hash
             swalHashAdded: false, // 标记是否为弹窗添加了hash
+            isLoadingRemoteSessions: false, // 是否正在加载远程会话数据
             // 存储模式相关
             storageMode: 'local', // 'local' 或 'webdav'
             webdavConfig: {
