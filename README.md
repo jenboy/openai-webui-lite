@@ -229,7 +229,7 @@ A: 访问 [Tavily](https://tavily.com/) 注册账号并获取 API Key。可以�
 A: 通过环境变量 `TITLE` 设置自定义标题，如 `TITLE=My AI Assistant`。标题会同时影响网页标题和 Favicon 的显示样式。
 
 **Q: TITLE 环境变量是如何影响 Favicon 的？**  
-A: `TITLE` 中包含 Gemini 或 Qwen 字样时（忽略大小写），网站 Favicon 会自动变为相应的模型 Logo，否则 Logo 默认为 ChatBot 的样式。
+A: `TITLE` 中包含 Gemini、OpenAI、Claude、Qwen、DeepSeek、Router 字样时（忽略大小写），网站 Favicon 会自动变为相应的模型 Logo，否则 Logo 默认为 ChatBot 的样式。
 
 ## 📄 许可证
 
