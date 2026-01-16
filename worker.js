@@ -652,6 +652,133 @@ ${truncatedAnswer}
     }
   }
 
+  // 处理 WebDAV 代理的 OPTIONS 预检请求（必须放在 WebDAV 代理逻辑之前）
+  if (apiMethod === 'OPTIONS' && apiPath.startsWith('/webdav')) {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods':
+          'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS',
+        'Access-Control-Allow-Headers':
+          'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth',
+        'Access-Control-Max-Age': '86400'
+      }
+    });
+  }
+
+  // WebDAV 代理接口 - 解决跨域问题
+  if (apiPath === '/webdav' || apiPath.startsWith('/webdav/')) {
+    // 从请求头获取 WebDAV 配置
+    const webdavUrl = request.headers.get('X-WebDAV-URL');
+    const webdavAuth = request.headers.get('X-WebDAV-Auth');
+
+    if (!webdavUrl) {
+      return createErrorResponse('Missing X-WebDAV-URL header', 400);
+    }
+
+    // 构建目标 URL
+    // 如果路径是 /webdav/xxx，则将 /xxx 附加到 webdavUrl
+    let targetUrl = webdavUrl;
+    if (apiPath.startsWith('/webdav/')) {
+      const subPath = apiPath.substring(7); // 移除 '/webdav'
+      targetUrl = webdavUrl.replace(/\/$/, '') + subPath;
+    }
+
+    // 构建转发请求的 headers
+    const forwardHeaders = new Headers();
+
+    // 添加标准 User-Agent，避免某些服务器拒绝空或异常的 UA
+    forwardHeaders.set('User-Agent', 'WebDAV-Client/1.0');
+
+    if (webdavAuth) {
+      forwardHeaders.set('Authorization', webdavAuth);
+    }
+
+    // 复制某些必要的请求头
+    const contentType = request.headers.get('Content-Type');
+    if (contentType) {
+      forwardHeaders.set('Content-Type', contentType);
+    }
+
+    // PROPFIND 需要 Depth 头
+    const depth = request.headers.get('Depth');
+    if (depth) {
+      forwardHeaders.set('Depth', depth);
+    }
+
+    // 获取请求体
+    let requestBody = null;
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(apiMethod)) {
+      requestBody = await request.text();
+      // 对于有内容的请求，设置 Content-Length
+      if (requestBody) {
+        forwardHeaders.set(
+          'Content-Length',
+          new TextEncoder().encode(requestBody).length.toString()
+        );
+      }
+    }
+
+    try {
+      // 调试日志
+      console.log('[WebDAV Proxy] Method:', apiMethod);
+      console.log('[WebDAV Proxy] Target URL:', targetUrl);
+      console.log(
+        '[WebDAV Proxy] Headers:',
+        Object.fromEntries(forwardHeaders.entries())
+      );
+
+      // 转发请求到 WebDAV 服务器
+      // 使用 redirect: 'manual' 避免 HTTP 重定向时 PUT 变成 GET 的问题
+      const webdavResponse = await fetch(targetUrl, {
+        method: apiMethod,
+        headers: forwardHeaders,
+        body: requestBody,
+        redirect: 'manual'
+      });
+
+      // 如果是重定向响应，记录日志
+      if ([301, 302, 303, 307, 308].includes(webdavResponse.status)) {
+        const location = webdavResponse.headers.get('Location');
+        console.log('[WebDAV Proxy] Redirect detected! Location:', location);
+        // 返回错误提示用户使用 HTTPS
+        return createErrorResponse(
+          'WebDAV 服务器返回重定向，请检查是否需要使用 HTTPS URL。重定向目标: ' +
+            location,
+          502
+        );
+      }
+
+      // 调试日志
+      console.log('[WebDAV Proxy] Response Status:', webdavResponse.status);
+
+      // 构建响应头，添加 CORS 头
+      const responseHeaders = new Headers(webdavResponse.headers);
+      responseHeaders.set('Access-Control-Allow-Origin', '*');
+      responseHeaders.set(
+        'Access-Control-Allow-Methods',
+        'GET, PUT, POST, DELETE, PROPFIND, MKCOL, OPTIONS'
+      );
+      responseHeaders.set(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, Depth, X-WebDAV-URL, X-WebDAV-Auth'
+      );
+
+      // 移除 WWW-Authenticate 头，避免浏览器弹出原生认证框
+      responseHeaders.delete('WWW-Authenticate');
+
+      return new Response(webdavResponse.body, {
+        status: webdavResponse.status,
+        statusText: webdavResponse.statusText,
+        headers: responseHeaders
+      });
+    } catch (error) {
+      console.error('WebDAV proxy error:', error);
+      return createErrorResponse('WebDAV proxy error: ' + error.message, 502);
+    }
+  }
+
   if (!apiPath.startsWith('/v1')) {
     return createErrorResponse(
       apiPath + ' Invalid API path. Must start with /v1',
@@ -1262,8 +1389,7 @@ function getManifestContent(title) {
 }
 
 function getHtmlContent(modelIds, tavilyKeys, title) {
-  let html = `
-<!DOCTYPE html>
+  let htmlContent = `<!DOCTYPE html>
 <html lang="zh-Hans">
   <head>
     <meta charset="UTF-8" />
@@ -1299,18 +1425,1341 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       rel="stylesheet"
       href="https://unpkg.com/github-markdown-css@5.8.1/github-markdown-light.css"
     />
+    <!-- CSS: style.css -->
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      body {
+        position: relative;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        min-height: 100vh;
+        min-height: 100dvh;
+        color: #333;
+      }
+      
+      [v-cloak] {
+        display: none;
+      }
+      
+      .hidden {
+        display: none !important;
+      }
+      
+      /* 滚动条颜色浅一些 */
+      body.pc *::-webkit-scrollbar {
+        width: 10px;
+        background-color: #f5f6f7;
+      }
+      
+      body.pc *::-webkit-scrollbar-thumb:hover {
+        background-color: #d1d5db;
+      }
+      
+      body.pc *::-webkit-scrollbar-thumb {
+        background-color: #e5e7eb;
+        border-radius: 5px;
+      }
+      
+      body.pc *::-webkit-scrollbar-track {
+        background-color: #f5f6f7;
+      }
+      
+      button,
+      label {
+        user-select: none;
+      }
+      
+      label * {
+        vertical-align: middle;
+      }
+      
+      input::placeholder,
+      textarea::placeholder {
+        color: #a0aec0;
+        user-select: none;
+      }
+      
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        height: 100vh;
+        display: flex;
+        gap: 20px;
+        transition: max-width 0.2s;
+      }
+      
+      .container.wide {
+        max-width: 1600px;
+      }
+      
+      .sidebar {
+        width: 300px;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 15px;
+        padding: 20px;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .sidebar.mobile {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        z-index: 1000;
+        padding: 15px 20px;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        backdrop-filter: blur(15px);
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 0;
+      }
+      
+      .sidebar.mobile.show {
+        transform: translateX(0);
+      }
+      
+      .sidebar-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s ease;
+      }
+      
+      .sidebar-overlay.show {
+        opacity: 1;
+        visibility: visible;
+      }
+      
+      .mobile-menu-btn {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        width: 44px;
+        height: 44px;
+        background: rgba(255, 255, 255, 0.35);
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        cursor: pointer;
+        z-index: 1001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        color: #4a5568;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s ease;
+      }
+      
+      .mobile-menu-btn:hover {
+        /* background: #f7fafc; */
+        transform: scale(1.05);
+      }
+      
+      .main-chat {
+        flex: 1 1 0;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 15px;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        /* 防止flex子项撑大父容器 */
+        overflow: hidden;
+        /* 确保内容不会溢出 */
+      }
+      
+      .header {
+        position: relative;
+        padding: 18px 32px 18px 18px;
+        border-bottom: 1px solid #e1e5e9;
+        display: flex;
+        justify-content: between;
+        align-items: center;
+        gap: 15px;
+        flex-wrap: wrap;
+      }
+      
+      .header h2 {
+        display: flex;
+        align-items: center;
+        margin: 0;
+        color: #495057;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      
+      .header h2 .brand {
+        display: flex;
+        align-items: center;
+        margin: 0;
+        color: #495057;
+        gap: 6px;
+        user-select: none;
+      }
+      
+      .header .tool-btns {
+        position: absolute;
+        display: flex;
+        top: 0;
+        bottom: 0;
+        right: 14px;
+        width: 10em;
+        height: 32px;
+        margin: auto 0;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 10px;
+      }
+      
+      .header .tool-btn {
+        height: 32px;
+        background: rgba(255, 255, 255, 0.3);
+        backdrop-filter: saturate(180%) blur(16px);
+        border: 1px solid #e1e5e9;
+        color: #666;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      
+      .header .tool-btn:hover {
+        background: rgba(255, 255, 255, 0.7);
+        border-color: #a8edea;
+        color: #2d3748;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+      }
+      
+      .header .wide-btn {
+        opacity: 0.3;
+      }
+      
+      .header .wide-btn:hover {
+        opacity: 1;
+      }
+      
+      .settings-section {
+        text-align: right;
+        margin-top: 3px;
+        margin-bottom: 15px;
+      }
+      
+      .settings-btn {
+        width: 100%;
+        padding: 12px 16px;
+        background: #f3f3f3;
+        border: none;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+      }
+      
+      .settings-btn.mobile {
+        width: calc(100% - 54px);
+      }
+      
+      .settings-btn:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+      }
+      
+      .api-key-input {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #e1e5e9;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: border-color 0.3s;
+      }
+      
+      .api-key-input:focus {
+        outline: none;
+        border-color: #a8edea;
+      }
+      
+      .model-select {
+        border-radius: 6px;
+        background: white;
+        font-size: 14px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .model-select.simple {
+        padding: 8px 12px;
+        border: 2px solid #e1e5e9;
+      }
+      
+      /* Tom Select Customization */
+      .ts-wrapper {
+        min-width: 200px;
+        max-width: 400px;
+        display: inline-block;
+      }
+      .ts-wrapper .ts-control {
+        border: 2px solid #e1e5e9 !important;
+        border-radius: 6px !important;
+        padding: 8px 24px 8px 12px !important;
+        box-shadow: none !important;
+        background-image: none !important;
+      }
+      .ts-wrapper .ts-control:after {
+        right: 8px !important;
+      }
+      .ts-control.focus {
+        border-color: #a8edea !important;
+      }
+      .ts-dropdown {
+        border: 2px solid #e1e5e9 !important;
+        border-radius: 6px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+        z-index: 1000 !important;
+      }
+      .ts-dropdown .option {
+        padding: 8px 12px !important;
+      }
+      .ts-dropdown .active {
+        background-color: #f8f9fa !important;
+        color: inherit !important;
+      }
+      .ts-dropdown .ts-dropdown-content {
+        max-height: 21em;
+      }
+      
+      .model-wrap {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: nowrap;
+      }
+      
+      .model-search-label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+        cursor: pointer;
+        font-size: 14px;
+        color: #4a5568;
+      }
+      
+      .model-search-label:hover {
+        color: #2d3748;
+      }
+      
+      .model-search {
+        cursor: pointer;
+        width: 16px;
+        height: 16px;
+        margin: 0;
+      }
+      
+      .sessions {
+        flex: 1;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      
+      .loading-remote-sessions {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 20px;
+        color: #888;
+        font-size: 14px;
+        gap: 12px;
+      }
+      
+      .loading-spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid #e0e0e0;
+        border-top-color: #5fbdbd;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      
+      .session-item {
+        padding: 8px 12px;
+        margin-bottom: 8px;
+        background: #f8f9fa;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      
+      .session-item:hover {
+        background: #e9ecef;
+        /* transform: translateX(3px); */
+      }
+      
+      .session-item.active {
+        background: #ffffff;
+        color: #2d3748;
+        border: 1px solid #a8edea;
+        box-shadow: 2px 2px 10px rgba(168, 237, 234, 0.35);
+      }
+      
+      .session-title {
+        font-size: 14px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+        margin-right: 8px;
+      }
+      
+      .delete-btn {
+        background: none;
+        border: none;
+        color: #999;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 16px;
+        opacity: 0.7;
+      }
+      
+      .delete-btn:hover {
+        opacity: 1;
+        color: #dc3545;
+        background: rgba(220, 53, 69, 0.1);
+      }
+      
+      .new-session-btn {
+        width: 100%;
+        padding: 12px;
+        border: none;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        color: #444;
+        font-size: 14px;
+        font-weight: 500;
+        /* 白色外发光字 */
+        text-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
+        cursor: pointer;
+        margin-bottom: 15px;
+        transition: all 0.2s ease;
+      }
+      
+      .new-session-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.12);
+        color: #2d3748;
+      }
+      
+      .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        min-width: 0;
+        /* 防止内容撑大容器 */
+      }
+      
+      .message-content {
+        flex: 1;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+      
+      .input-area {
+        padding: 20px;
+        border-top: 1px solid #e1e5e9;
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+        position: relative;
+      }
+      
+      .input-wrapper {
+        flex: 1;
+        position: relative;
+      }
+      
+      .message-input {
+        display: block;
+        width: 100%;
+        min-height: 44px;
+        max-height: 144px;
+        padding: 9px 16px;
+        padding-right: 34px;
+        border: 2px solid #e1e5e9;
+        border-radius: 22px;
+        resize: none;
+        font-family: inherit;
+        font-size: 14px;
+        line-height: 1.4;
+        transition: border-color 0.3s;
+      }
+      
+      .message-input.can-upload {
+        padding-left: 44px;
+      }
+      
+      .message-input:focus {
+        outline: none;
+        border-color: #a8edea;
+      }
+      
+      .clear-btn {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 20px;
+        height: 20px;
+        background: #cbd5e0;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        color: #fff;
+        transition: all 0.2s ease;
+        opacity: 0.7;
+      }
+      
+      .clear-btn:hover {
+        background: #a0aec0;
+        opacity: 1;
+        transform: translateY(-50%) scale(1.1);
+      }
+      
+      .send-btn {
+        padding: 12px 18px;
+        background: #4299e1;
+        color: white;
+        border: none;
+        border-radius: 22px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        min-width: 60px;
+        height: 44px;
+        box-shadow: 0 2px 4px rgba(66, 153, 225, 0.3);
+      }
+      
+      .send-btn.danger {
+        background: #dc3545;
+        color: white;
+      }
+      
+      .send-btn.danger:hover {
+        background: #c82333;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(220, 53, 69, 0.4);
+      }
+      
+      .send-btn:hover:not(:disabled):not(.danger) {
+        background: #3182ce;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(66, 153, 225, 0.4);
+      }
+      
+      .send-btn:disabled {
+        background: #cbd5e0;
+        color: #a0aec0;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      
+      /* 上传图片按钮 */
+      .upload-btn {
+        position: absolute;
+        left: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 28px;
+        height: 28px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.6;
+        transition: all 0.2s ease;
+        padding: 0;
+      }
+      
+      .upload-btn:hover:not(:disabled) {
+        opacity: 1;
+        transform: translateY(-50%) scale(1.1);
+      }
+      
+      .upload-btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+      
+      /* 上传的图片标签容器 */
+      .uploaded-images-tags {
+        position: absolute;
+        top: -44px;
+        left: 0;
+        display: flex;
+        gap: 8px;
+        padding-left: 20px;
+        z-index: 10;
+      }
+      
+      /* 单个图片标签 */
+      .image-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px 4px 4px;
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        border-radius: 20px;
+        font-size: 12px;
+        color: #333;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      }
+      
+      /* 文本文件标签样式 */
+      .image-tag.plaintext-tag {
+        cursor: pointer;
+        padding: 4px 8px;
+        background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
+      }
+      
+      .image-tag.plaintext-tag:hover {
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
+      }
+      
+      .image-tag .plaintext-icon {
+        font-size: 18px;
+      }
+      
+      .image-tag img {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid white;
+      }
+      
+      .image-tag-text {
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      
+      .image-tag-remove {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.15);
+        border: none;
+        color: white;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+        padding: 0;
+      }
+      
+      .image-tag-remove:hover {
+        background: rgba(220, 53, 69, 0.8);
+        transform: scale(1.1);
+      }
+      
+      /* 问题区域的图片链接 */
+      .question-images {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      
+      .question-images a {
+        display: inline-block;
+        padding: 4px 10px;
+        background: rgba(168, 237, 234, 0.3);
+        border: 1px solid rgba(168, 237, 234, 0.5);
+        border-radius: 12px;
+        color: #2d3748;
+        text-decoration: none;
+        font-size: 12px;
+        transition: all 0.2s ease;
+      }
+      
+      .question-images a:hover {
+        background: rgba(168, 237, 234, 0.5);
+        border-color: #a8edea;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        cursor: pointer;
+      }
+      
+      /* SweetAlert2 图片预览样式 */
+      .swal-image-preview {
+        max-width: 90vw !important;
+        max-height: 90vh !important;
+        object-fit: contain !important;
+        margin-top: 2.5em !important;
+        margin-bottom: 0 !important;
+      }
+      
+      .swal2-popup:has(.swal-image-preview) {
+        padding-bottom: 0 !important;
+        overflow: hidden !important;
+      }
+      
+      .loading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #a8edea;
+        padding: 0px 16px 16px;
+      }
+      
+      .spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid #e1e5e9;
+        border-top: 2px solid #a8edea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+      
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+      
+      /* 移动端适配 */
+      @media (max-width: 768px) {
+        body {
+          overflow: hidden;
+        }
+      
+        .container {
+          flex-direction: column;
+          padding: 10px;
+          height: 100vh;
+          height: 100dvh;
+          position: relative;
+        }
+      
+        .swal2-container h2 {
+          font-size: 1.5em;
+        }
+      
+        div.swal2-html-container {
+          padding-left: 1em;
+          padding-right: 1em;
+        }
+      
+        .main-chat {
+          flex: 1;
+          min-height: 0;
+          width: 100%;
+          margin-top: 0;
+        }
+      
+        .header {
+          padding: 15px;
+          padding-left: 64px;
+          flex-direction: column;
+          align-items: stretch;
+          gap: 10px;
+        }
+      
+        .header .tool-btns {
+          top: 16px;
+          bottom: auto;
+          width: 64px;
+          margin: 0;
+        }
+      
+        .model-wrap {
+          width: 100%;
+        }
+      
+        .model-select {
+          flex: 1;
+          min-width: 0;
+        }
+      
+        .model-search-label {
+          flex-shrink: 0;
+          font-size: 13px;
+        }
+      
+        .input-area {
+          padding: 12px;
+          gap: 6px;
+        }
+      
+        .input-wrapper {
+          flex: 1;
+        }
+      
+        .message-input {
+          font-size: 16px;
+          /* 防止iOS缩放 */
+        }
+      
+        .sessions {
+          max-height: none;
+          flex: 1;
+        }
+      
+        /* 移动端图片标签样式 */
+        .uploaded-images-tags {
+          top: -36px;
+        }
+      
+        .image-tag {
+          padding: 3px 6px 3px 3px;
+          font-size: 11px;
+        }
+      
+        .image-tag img {
+          width: 24px;
+          height: 24px;
+        }
+      
+        .content-section > h4 small {
+          position: relative;
+          display: inline-block;
+          vertical-align: middle;
+          white-space: nowrap;
+          max-width: 27em;
+          padding-bottom: 1px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      
+        .content-section:hover > h4 small {
+          max-width: 13em;
+        }
+      }
+      
+      .empty-state {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #6c757d;
+        text-align: center;
+        padding: 40px;
+      }
+      
+      .empty-state h3 {
+        margin-bottom: 10px;
+        color: #495057;
+      }
+      
+      .error-message {
+        background: #f8d7da;
+        color: #721c24;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin: 0 8px;
+        border: 1px solid #f5c6cb;
+      }
+      
+      .role-setting {
+        margin-bottom: 15px;
+      }
+      
+      .role-textarea {
+        position: relative;
+        width: 100%;
+        min-height: 90px;
+        max-height: 30vh;
+        padding: 12px;
+        border: 2px solid #e1e5e9;
+        border-radius: 8px;
+        font-size: 14px;
+        font-family: inherit;
+        resize: vertical;
+        transition: border-color 0.3s;
+      }
+      
+      .role-textarea:focus {
+        outline: none;
+        border-color: #a8edea;
+      }
+      
+      .role-textarea[disabled] {
+        color: rgba(0, 0, 0, 0.3);
+      }
+      
+      .copy-btn,
+      .reset-btn {
+        background: none;
+        border: 1px solid #e1e5e9;
+        color: #666;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        margin-left: 8px;
+        opacity: 0;
+        transition: all 0.2s;
+      }
+      
+      .reset-btn {
+        padding: 3px 8px;
+        opacity: 1 !important;
+      }
+      
+      .copy-btn:hover {
+        background: #f8f9fa;
+        border-color: #a8edea;
+      }
+      
+      .content-section:hover .copy-btn {
+        opacity: 1;
+      }
+      
+      .session-content {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        padding: 8px;
+      }
+      
+      .content-section {
+        flex: 0 0 auto;
+        position: relative;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #e1e5e9;
+      }
+      
+      .content-section > h4 {
+        position: relative;
+        margin: 0 0 10px 0;
+        color: #495057;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      
+      .content-section > h4 small {
+        color: #6c757d;
+        font-size: 12px;
+        font-weight: normal;
+      }
+      
+      .content-section > h4:has(input:checked) + .rendered-content {
+        position: relative;
+        max-height: 10em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      
+      .role-section {
+        position: relative;
+        background: #f8f9fa;
+      }
+      
+      .role-section:has(input:checked):after {
+        content: '';
+        display: block;
+        position: absolute;
+        z-index: 1;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 50%;
+        background: linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(248, 249, 250, 1) 80%,
+          rgba(248, 249, 250, 1) 100%
+        );
+        pointer-events: none;
+      }
+      
+      .question-section {
+        background: linear-gradient(
+          135deg,
+          rgba(168, 237, 234, 0.18),
+          rgba(254, 214, 227, 0.18)
+        );
+      }
+      
+      .answer-section {
+        background: #ffffff;
+      }
+      
+      .markdown-body {
+        background: none;
+        white-space-collapse: collapse;
+        overflow-x: auto;
+        max-width: 100%;
+        word-wrap: break-word;
+      }
+      
+      /* 表格样式 - 防止溢出 */
+      .markdown-body table {
+        max-width: 100%;
+        width: 100%;
+        table-layout: auto;
+        border-collapse: collapse;
+        margin: 1em 0;
+        font-size: 0.9em;
+      }
+      
+      .markdown-body th,
+      .markdown-body td {
+        padding: 8px 12px;
+        border: 1px solid #e1e5e9;
+        text-align: left;
+        vertical-align: top;
+        word-break: break-word;
+        min-width: 0;
+      }
+      
+      .markdown-body th {
+        background-color: #f8f9fa;
+        font-weight: 600;
+      }
+      
+      /* 表格容器 - 提供水平滚动 */
+      .rendered-content {
+        position: relative;
+        line-height: 1.6;
+        overflow-x: auto;
+        overflow-y: visible;
+        max-width: 100%;
+      }
+      
+      .rendered-content p {
+        margin: 0.5em 0;
+      }
+      
+      .rendered-content code {
+        background: #f1f3f5;
+        padding: 2px 4px;
+        border-radius: 3px;
+        white-space: pre-wrap !important;
+        word-break: break-all !important;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 0.9em;
+      }
+      
+      .rendered-content pre {
+        background: #f8f9fa;
+        border: 1px solid #e1e5e9;
+        padding: 15px;
+        border-radius: 8px;
+        overflow-x: auto;
+        white-space-collapse: collapse;
+        margin: 1em 0;
+      }
+      
+      .rendered-content pre code {
+        background: none;
+        padding: 0;
+      }
+      
+      .rendered-content blockquote {
+        border-left: 4px solid #a8edea;
+        margin: 1em 0;
+        padding-left: 1em;
+        color: #666;
+      }
+      
+      .streaming-answer {
+        min-height: 1.5em;
+      }
+      
+</style>
     <script>
       var isWechat = new RegExp('wechat', 'i').test(window.navigator.userAgent);
       if (isWechat && document.title) {
         document.title = '✨ ' + document.title;
       }
-      // IndexedDB 封装
+      // IndexedDB 封装（支持WebDAV远程存储）
       class OpenaiDB {
         constructor() {
           this.dbName = 'OpenaiChatDB';
           this.version = 1;
           this.storeName = 'chatData';
           this.db = null;
+          // WebDAV 配置
+          this.webdavEnabled = false;
+          this.webdavConfig = {
+            url: '',
+            username: '',
+            password: '',
+            path: '/openai-chat/'
+          };
+        }
+
+        // 加载WebDAV配置（从IndexedDB）
+        async loadWebDAVConfig() {
+          if (!this.db) await this.init();
+          try {
+            var configStr = await this.getItem('openai_webdav_config');
+            if (configStr) {
+              var parsed = JSON.parse(configStr);
+              this.webdavEnabled = parsed.enabled || false;
+              this.webdavConfig = parsed.config || this.webdavConfig;
+            }
+          } catch (e) {
+            console.error('解析WebDAV配置失败:', e);
+          }
+        }
+
+        // 保存WebDAV配置（到IndexedDB）
+        async saveWebDAVConfig(enabled, config) {
+          this.webdavEnabled = enabled;
+          this.webdavConfig = config;
+          // 直接写入IndexedDB，不走setItem（避免触发WebDAV同步）
+          if (!this.db) await this.init();
+          return new Promise((resolve, reject) => {
+            var transaction = this.db.transaction(
+              [this.storeName],
+              'readwrite'
+            );
+            var store = transaction.objectStore(this.storeName);
+            var request = store.put({
+              key: 'openai_webdav_config',
+              value: JSON.stringify({ enabled: enabled, config: config })
+            });
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve();
+          });
+        }
+
+        // 构建WebDAV代理URL
+        _buildProxyUrl(targetPath) {
+          // 通过 /webdav 代理接口转发请求
+          return '/webdav' + targetPath;
+        }
+
+        // 构建WebDAV代理请求头
+        _buildProxyHeaders(config, extraHeaders = {}) {
+          var regexp = new RegExp('\\/$');
+          var baseUrl = config.url.replace(regexp, '');
+          var headers = {
+            'X-WebDAV-URL': baseUrl,
+            'X-WebDAV-Auth':
+              'Basic ' + btoa(config.username + ':' + config.password)
+          };
+          return Object.assign(headers, extraHeaders);
+        }
+
+        // 测试WebDAV连接（使用 PUT/GET/DELETE 方式，兼容性更好）
+        async testWebDAVConnection(config) {
+          var testFileName = '.webdav-test-' + Date.now() + '.txt';
+          var testContent = 'test-' + Date.now();
+          var regexp = new RegExp('\\/$');
+          var targetPath = config.path.replace(regexp, '') + '/' + testFileName;
+          var proxyUrl = this._buildProxyUrl(targetPath);
+          var headers = this._buildProxyHeaders(config, {
+            'Content-Type': 'text/plain'
+          });
+
+          try {
+            // 步骤1: 尝试写入测试文件
+            var putResponse = await fetch(proxyUrl, {
+              method: 'PUT',
+              headers: headers,
+              body: testContent
+            });
+
+            // 401 表示认证失败
+            if (putResponse.status === 401) {
+              return { success: false, error: '认证失败，请检查用户名和密码' };
+            }
+
+            // 403 表示没有写入权限
+            if (putResponse.status === 403) {
+              return { success: false, error: '没有写入权限' };
+            }
+
+            // PUT 成功的状态码: 200, 201, 204
+            if (![200, 201, 204].includes(putResponse.status)) {
+              return {
+                success: false,
+                error:
+                  '写入测试失败，请检查目录是否已创建: HTTP ' +
+                  putResponse.status
+              };
+            }
+
+            // 步骤2: 尝试读取测试文件
+            var getHeaders = this._buildProxyHeaders(config);
+            var getResponse = await fetch(proxyUrl, {
+              method: 'GET',
+              headers: getHeaders
+            });
+
+            if (getResponse.status !== 200) {
+              return {
+                success: false,
+                error: '读取测试失败: HTTP ' + getResponse.status
+              };
+            }
+
+            var readContent = await getResponse.text();
+            if (readContent !== testContent) {
+              return { success: false, error: '数据验证失败' };
+            }
+
+            // 步骤3: 删除测试文件（清理）
+            var deleteHeaders = this._buildProxyHeaders(config);
+            await fetch(proxyUrl, {
+              method: 'DELETE',
+              headers: deleteHeaders
+            });
+            // 删除失败也不影响测试结果，忽略错误
+
+            return { success: true };
+          } catch (e) {
+            return { success: false, error: e.message || '网络错误' };
+          }
+        }
+
+        // WebDAV 读取文件
+        async webdavGet(filename) {
+          var targetPath = this.webdavConfig.path + filename;
+          var proxyUrl = this._buildProxyUrl(targetPath);
+          var headers = this._buildProxyHeaders(this.webdavConfig);
+          try {
+            var response = await fetch(proxyUrl, {
+              method: 'GET',
+              headers: headers
+            });
+            if (response.status === 200) {
+              return await response.text();
+            } else if (response.status === 404) {
+              return null;
+            } else {
+              console.error('WebDAV GET 失败:', response.status);
+              return null;
+            }
+          } catch (e) {
+            console.error('WebDAV GET 错误:', e);
+            return null;
+          }
+        }
+
+        // WebDAV 写入文件
+        async webdavPut(filename, content) {
+          var targetPath = this.webdavConfig.path + filename;
+          var proxyUrl = this._buildProxyUrl(targetPath);
+          var headers = this._buildProxyHeaders(this.webdavConfig, {
+            'Content-Type': 'application/json'
+          });
+          try {
+            var response = await fetch(proxyUrl, {
+              method: 'PUT',
+              headers: headers,
+              body: content
+            });
+            return (
+              response.status === 200 ||
+              response.status === 201 ||
+              response.status === 204
+            );
+          } catch (e) {
+            console.error('WebDAV PUT 错误:', e);
+            return false;
+          }
+        }
+
+        // WebDAV 防抖同步（减少频繁写入）
+        _debouncedWebdavSync(value) {
+          this._pendingWebdavData = value;
+          if (this._webdavSyncTimer) {
+            clearTimeout(this._webdavSyncTimer);
+          }
+          this._webdavSyncTimer = setTimeout(async () => {
+            if (this._pendingWebdavData) {
+              console.log('[WebDAV] 同步数据到远程...');
+              var success = await this.webdavPut(
+                'sessions.json',
+                this._pendingWebdavData
+              );
+              if (!success) {
+                console.error('[WebDAV] 同步失败');
+              } else {
+                console.log('[WebDAV] 同步成功');
+              }
+              this._pendingWebdavData = null;
+            }
+            this._webdavSyncTimer = null;
+          }, 3000); // 3秒防抖
+        }
+
+        // 立即同步到 WebDAV（用于页面关闭前等场景）
+        async flushWebdavSync() {
+          if (this._webdavSyncTimer) {
+            clearTimeout(this._webdavSyncTimer);
+            this._webdavSyncTimer = null;
+          }
+          if (this._pendingWebdavData && this.webdavEnabled) {
+            console.log('[WebDAV] 立即同步数据...');
+            await this.webdavPut('sessions.json', this._pendingWebdavData);
+            this._pendingWebdavData = null;
+          }
         }
 
         async init() {
@@ -1333,9 +2782,10 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         }
 
         async setItem(key, value) {
+          // 先写入本地 IndexedDB（保证数据安全）
           if (!this.db) await this.init();
 
-          return new Promise((resolve, reject) => {
+          await new Promise((resolve, reject) => {
             const transaction = this.db.transaction(
               [this.storeName],
               'readwrite'
@@ -1346,9 +2796,34 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             request.onerror = () => reject(request.error);
             request.onsuccess = () => resolve();
           });
+
+          // 如果是sessions且启用了WebDAV，则使用防抖同步到远程
+          if (key === 'openai_sessions' && this.webdavEnabled) {
+            this._debouncedWebdavSync(value);
+          }
         }
 
         async getItem(key) {
+          // 如果是sessions且启用了WebDAV，则从远程读取
+          if (key === 'openai_sessions' && this.webdavEnabled) {
+            // 设置加载状态
+            if (window.app) window.app.isLoadingRemoteSessions = true;
+            try {
+              // 120秒内的缓存有效
+              const timestamp = Math.floor(Date.now() / 1000 / 120);
+              var remoteData = await this.webdavGet(
+                'sessions.json?v=' + timestamp
+              );
+              if (remoteData !== null) {
+                return remoteData;
+              }
+              // 如果远程没有数据，回退到本地
+              console.log('WebDAV无数据，尝试从本地读取');
+            } finally {
+              if (window.app) window.app.isLoadingRemoteSessions = false;
+            }
+          }
+
           if (!this.db) await this.init();
 
           return new Promise((resolve, reject) => {
@@ -1449,1041 +2924,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       // 全局实例
       window.openaiDB = new OpenaiDB();
     </script>
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-
-      body {
-        position: relative;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-          sans-serif;
-        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-        min-height: 100vh;
-        min-height: 100dvh;
-        color: #333;
-      }
-
-      [v-cloak] {
-        display: none;
-      }
-
-      .hidden {
-        display: none !important;
-      }
-
-      /* 滚动条颜色浅一些 */
-      body.pc *::-webkit-scrollbar {
-        width: 10px;
-        background-color: #f5f6f7;
-      }
-
-      body.pc *::-webkit-scrollbar-thumb:hover {
-        background-color: #d1d5db;
-      }
-
-      body.pc *::-webkit-scrollbar-thumb {
-        background-color: #e5e7eb;
-        border-radius: 5px;
-      }
-
-      body.pc *::-webkit-scrollbar-track {
-        background-color: #f5f6f7;
-      }
-
-      button,
-      label {
-        user-select: none;
-      }
-
-      label * {
-        vertical-align: middle;
-      }
-
-      input::placeholder,
-      textarea::placeholder {
-        color: #a0aec0;
-        user-select: none;
-      }
-
-      .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
-        height: 100vh;
-        display: flex;
-        gap: 20px;
-        transition: max-width 0.2s;
-      }
-
-      .container.wide {
-        max-width: 1600px;
-      }
-
-      .sidebar {
-        width: 300px;
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 15px;
-        padding: 20px;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        display: flex;
-        flex-direction: column;
-      }
-
-      .sidebar.mobile {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100vh;
-        height: 100dvh;
-        z-index: 1000;
-        padding: 15px 20px;
-        transform: translateX(-100%);
-        transition: transform 0.3s ease;
-        backdrop-filter: blur(15px);
-        background: rgba(255, 255, 255, 0.98);
-        border-radius: 0;
-      }
-
-      .sidebar.mobile.show {
-        transform: translateX(0);
-      }
-
-      .sidebar-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100vh;
-        height: 100dvh;
-        background: rgba(0, 0, 0, 0.5);
-        z-index: 999;
-        opacity: 0;
-        visibility: hidden;
-        transition: all 0.3s ease;
-      }
-
-      .sidebar-overlay.show {
-        opacity: 1;
-        visibility: visible;
-      }
-
-      .mobile-menu-btn {
-        position: fixed;
-        top: 20px;
-        left: 20px;
-        width: 44px;
-        height: 44px;
-        background: rgba(255, 255, 255, 0.35);
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        cursor: pointer;
-        z-index: 1001;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px;
-        color: #4a5568;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        transition: all 0.2s ease;
-      }
-
-      .mobile-menu-btn:hover {
-        /* background: #f7fafc; */
-        transform: scale(1.05);
-      }
-
-      .main-chat {
-        flex: 1 1 0;
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 15px;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-        /* 防止flex子项撑大父容器 */
-        overflow: hidden;
-        /* 确保内容不会溢出 */
-      }
-
-      .header {
-        position: relative;
-        padding: 18px 32px 18px 18px;
-        border-bottom: 1px solid #e1e5e9;
-        display: flex;
-        justify-content: between;
-        align-items: center;
-        gap: 15px;
-        flex-wrap: wrap;
-      }
-
-      .header h2 {
-        display: flex;
-        align-items: center;
-        margin: 0;
-        color: #495057;
-        user-select: none;
-        -webkit-tap-highlight-color: transparent;
-        -webkit-touch-callout: none;
-      }
-
-      .header h2 .brand {
-        display: flex;
-        align-items: center;
-        margin: 0;
-        color: #495057;
-        gap: 6px;
-        user-select: none;
-      }
-
-      .header .tool-btns {
-        position: absolute;
-        display: flex;
-        top: 0;
-        bottom: 0;
-        right: 14px;
-        width: 10em;
-        height: 32px;
-        margin: auto 0;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .header .tool-btn {
-        height: 32px;
-        background: rgba(255, 255, 255, 0.3);
-        backdrop-filter: saturate(180%) blur(16px);
-        border: 1px solid #e1e5e9;
-        color: #666;
-        cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-      }
-
-      .header .tool-btn:hover {
-        background: rgba(255, 255, 255, 0.7);
-        border-color: #a8edea;
-        color: #2d3748;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-      }
-
-      .header .wide-btn {
-        opacity: 0.3;
-      }
-
-      .header .wide-btn:hover {
-        opacity: 1;
-      }
-
-      .api-key-section {
-        margin-bottom: 15px;
-      }
-
-      .api-key-input {
-        width: 100%;
-        padding: 12px;
-        border: 2px solid #e1e5e9;
-        border-radius: 8px;
-        font-size: 14px;
-        transition: border-color 0.3s;
-      }
-
-      .api-key-input:focus {
-        outline: none;
-        border-color: #a8edea;
-      }
-
-      .model-select {
-        border-radius: 6px;
-        background: white;
-        font-size: 14px;
-        cursor: pointer;
-        user-select: none;
-      }
-      .model-select.simple {
-        padding: 8px 12px;
-        border: 2px solid #e1e5e9;
-      }
-
-      /* Tom Select Customization */
-      .ts-wrapper {
-        min-width: 200px;
-        max-width: 400px;
-        display: inline-block;
-      }
-      .ts-wrapper .ts-control {
-        border: 2px solid #e1e5e9 !important;
-        border-radius: 6px !important;
-        padding: 8px 24px 8px 12px !important;
-        box-shadow: none !important;
-        background-image: none !important;
-      }
-      .ts-wrapper .ts-control:after {
-        right: 8px !important;
-      }
-      .ts-control.focus {
-        border-color: #a8edea !important;
-      }
-      .ts-dropdown {
-        border: 2px solid #e1e5e9 !important;
-        border-radius: 6px !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
-        z-index: 1000 !important;
-      }
-      .ts-dropdown .option {
-        padding: 8px 12px !important;
-      }
-      .ts-dropdown .active {
-        background-color: #f8f9fa !important;
-        color: inherit !important;
-      }
-      .ts-dropdown .ts-dropdown-content {
-        max-height: 21em;
-      }
-
-      .model-wrap {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: nowrap;
-      }
-
-      .model-search-label {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        white-space: nowrap;
-        cursor: pointer;
-        font-size: 14px;
-        color: #4a5568;
-      }
-
-      .model-search-label:hover {
-        color: #2d3748;
-      }
-
-      .model-search {
-        cursor: pointer;
-        width: 16px;
-        height: 16px;
-        margin: 0;
-      }
-
-      .sessions {
-        flex: 1;
-        overflow-x: hidden;
-        overflow-y: auto;
-      }
-
-      .session-item {
-        padding: 8px 12px;
-        margin-bottom: 8px;
-        background: #f8f9fa;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.3s;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-
-      .session-item:hover {
-        background: #e9ecef;
-        /* transform: translateX(3px); */
-      }
-
-      .session-item.active {
-        background: #ffffff;
-        color: #2d3748;
-        border: 1px solid #a8edea;
-        box-shadow: 2px 2px 10px rgba(168, 237, 234, 0.35);
-      }
-
-      .session-title {
-        font-size: 14px;
-        font-weight: 500;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        flex: 1;
-        margin-right: 8px;
-      }
-
-      .delete-btn {
-        background: none;
-        border: none;
-        color: #999;
-        cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 16px;
-        opacity: 0.7;
-      }
-
-      .delete-btn:hover {
-        opacity: 1;
-        color: #dc3545;
-        background: rgba(220, 53, 69, 0.1);
-      }
-
-      .new-session-btn {
-        width: 100%;
-        padding: 12px;
-        border: none;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-        color: #444;
-        font-size: 14px;
-        font-weight: 500;
-        /* 白色外发光字 */
-        text-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
-        cursor: pointer;
-        margin-bottom: 15px;
-        transition: all 0.2s ease;
-      }
-
-      .new-session-btn:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.12);
-        color: #2d3748;
-      }
-
-      .messages-container {
-        flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        padding: 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 15px;
-        min-width: 0;
-        /* 防止内容撑大容器 */
-      }
-
-      .message-content {
-        flex: 1;
-        line-height: 1.5;
-        white-space: pre-wrap;
-      }
-
-      .input-area {
-        padding: 20px;
-        border-top: 1px solid #e1e5e9;
-        display: flex;
-        gap: 10px;
-        align-items: flex-end;
-        position: relative;
-      }
-
-      .input-wrapper {
-        flex: 1;
-        position: relative;
-      }
-
-      .message-input {
-        display: block;
-        width: 100%;
-        min-height: 44px;
-        max-height: 144px;
-        padding: 9px 16px;
-        padding-right: 34px;
-        border: 2px solid #e1e5e9;
-        border-radius: 22px;
-        resize: none;
-        font-family: inherit;
-        font-size: 14px;
-        line-height: 1.4;
-        transition: border-color 0.3s;
-      }
-
-      .message-input.can-upload {
-        padding-left: 44px;
-      }
-
-      .message-input:focus {
-        outline: none;
-        border-color: #a8edea;
-      }
-
-      .clear-btn {
-        position: absolute;
-        right: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 20px;
-        height: 20px;
-        background: #cbd5e0;
-        border: none;
-        border-radius: 50%;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 15px;
-        color: #fff;
-        transition: all 0.2s ease;
-        opacity: 0.7;
-      }
-
-      .clear-btn:hover {
-        background: #a0aec0;
-        opacity: 1;
-        transform: translateY(-50%) scale(1.1);
-      }
-
-      .send-btn {
-        padding: 12px 18px;
-        background: #4299e1;
-        color: white;
-        border: none;
-        border-radius: 22px;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 500;
-        transition: all 0.2s ease;
-        min-width: 60px;
-        height: 44px;
-        box-shadow: 0 2px 4px rgba(66, 153, 225, 0.3);
-      }
-
-      .send-btn.danger {
-        background: #dc3545;
-        color: white;
-      }
-
-      .send-btn.danger:hover {
-        background: #c82333;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(220, 53, 69, 0.4);
-      }
-
-      .send-btn:hover:not(:disabled):not(.danger) {
-        background: #3182ce;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(66, 153, 225, 0.4);
-      }
-
-      .send-btn:disabled {
-        background: #cbd5e0;
-        color: #a0aec0;
-        cursor: not-allowed;
-        transform: none;
-        box-shadow: none;
-      }
-
-      /* 上传图片按钮 */
-      .upload-image-btn {
-        position: absolute;
-        left: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 28px;
-        height: 28px;
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 18px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        opacity: 0.6;
-        transition: all 0.2s ease;
-        padding: 0;
-      }
-
-      .upload-image-btn:hover:not(:disabled) {
-        opacity: 1;
-        transform: translateY(-50%) scale(1.1);
-      }
-
-      .upload-image-btn:disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
-      }
-
-      /* 上传的图片标签容器 */
-      .uploaded-images-tags {
-        position: absolute;
-        top: -44px;
-        left: 0;
-        display: flex;
-        gap: 8px;
-        padding-left: 20px;
-        z-index: 10;
-      }
-
-      /* 单个图片标签 */
-      .image-tag {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px 4px 4px;
-        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-        border-radius: 20px;
-        font-size: 12px;
-        color: #333;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-      }
-
-      .image-tag img {
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 2px solid white;
-      }
-
-      .image-tag-text {
-        font-weight: 500;
-        white-space: nowrap;
-      }
-
-      .image-tag-remove {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: rgba(0, 0, 0, 0.15);
-        border: none;
-        color: white;
-        cursor: pointer;
-        font-size: 14px;
-        line-height: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.2s ease;
-        padding: 0;
-      }
-
-      .image-tag-remove:hover {
-        background: rgba(220, 53, 69, 0.8);
-        transform: scale(1.1);
-      }
-
-      /* 问题区域的图片链接 */
-      .question-images {
-        margin-top: 8px;
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .question-images a {
-        display: inline-block;
-        padding: 4px 10px;
-        background: rgba(168, 237, 234, 0.3);
-        border: 1px solid rgba(168, 237, 234, 0.5);
-        border-radius: 12px;
-        color: #2d3748;
-        text-decoration: none;
-        font-size: 12px;
-        transition: all 0.2s ease;
-      }
-
-      .question-images a:hover {
-        background: rgba(168, 237, 234, 0.5);
-        border-color: #a8edea;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        cursor: pointer;
-      }
-
-      /* SweetAlert2 图片预览样式 */
-      .swal-image-preview {
-        max-width: 90vw !important;
-        max-height: 90vh !important;
-        object-fit: contain !important;
-        margin-top: 2.5em !important;
-        margin-bottom: 0 !important;
-      }
-
-      .swal2-popup:has(.swal-image-preview) {
-        padding-bottom: 0 !important;
-        overflow: hidden !important;
-      }
-
-      .loading {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #a8edea;
-        padding: 0px 16px 16px;
-      }
-
-      .spinner {
-        width: 20px;
-        height: 20px;
-        border: 2px solid #e1e5e9;
-        border-top: 2px solid #a8edea;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-
-      @keyframes spin {
-        0% {
-          transform: rotate(0deg);
-        }
-
-        100% {
-          transform: rotate(360deg);
-        }
-      }
-
-      /* 移动端适配 */
-      @media (max-width: 768px) {
-        body {
-          overflow: hidden;
-        }
-
-        .container {
-          flex-direction: column;
-          padding: 10px;
-          height: 100vh;
-          height: 100dvh;
-          position: relative;
-        }
-
-        .swal2-container h2 {
-          font-size: 1.5em;
-        }
-
-        div.swal2-html-container {
-          padding-left: 1em;
-          padding-right: 1em;
-        }
-
-        .main-chat {
-          flex: 1;
-          min-height: 0;
-          width: 100%;
-          margin-top: 0;
-        }
-
-        .header {
-          padding: 15px;
-          padding-left: 64px;
-          flex-direction: column;
-          align-items: stretch;
-          gap: 10px;
-        }
-
-        .header .tool-btns {
-          top: 16px;
-          bottom: auto;
-          width: 64px;
-          margin: 0;
-        }
-
-        .model-wrap {
-          width: 100%;
-        }
-
-        .model-select {
-          flex: 1;
-          min-width: 0;
-        }
-
-        .model-search-label {
-          flex-shrink: 0;
-          font-size: 13px;
-        }
-
-        .input-area {
-          padding: 12px;
-          gap: 6px;
-        }
-
-        .input-wrapper {
-          flex: 1;
-        }
-
-        .message-input {
-          font-size: 16px;
-          /* 防止iOS缩放 */
-        }
-
-        .sessions {
-          max-height: none;
-          flex: 1;
-        }
-
-        /* 移动端图片标签样式 */
-        .uploaded-images-tags {
-          top: -36px;
-        }
-
-        .image-tag {
-          padding: 3px 6px 3px 3px;
-          font-size: 11px;
-        }
-
-        .image-tag img {
-          width: 24px;
-          height: 24px;
-        }
-
-        .content-section > h4 small {
-          position: relative;
-          display: inline-block;
-          vertical-align: middle;
-          white-space: nowrap;
-          max-width: 27em;
-          padding-bottom: 1px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .content-section:hover > h4 small {
-          max-width: 13em;
-        }
-      }
-
-      .empty-state {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        color: #6c757d;
-        text-align: center;
-        padding: 40px;
-      }
-
-      .empty-state h3 {
-        margin-bottom: 10px;
-        color: #495057;
-      }
-
-      .error-message {
-        background: #f8d7da;
-        color: #721c24;
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin: 0 8px;
-        border: 1px solid #f5c6cb;
-      }
-
-      .role-setting {
-        margin-bottom: 15px;
-      }
-
-      .role-textarea {
-        position: relative;
-        width: 100%;
-        min-height: 90px;
-        max-height: 30vh;
-        padding: 12px;
-        border: 2px solid #e1e5e9;
-        border-radius: 8px;
-        font-size: 14px;
-        font-family: inherit;
-        resize: vertical;
-        transition: border-color 0.3s;
-      }
-
-      .role-textarea:focus {
-        outline: none;
-        border-color: #a8edea;
-      }
-
-      .role-textarea[disabled] {
-        color: rgba(0, 0, 0, 0.3);
-      }
-
-      .copy-btn,
-      .reset-btn {
-        background: none;
-        border: 1px solid #e1e5e9;
-        color: #666;
-        cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-        margin-left: 8px;
-        opacity: 0;
-        transition: all 0.2s;
-      }
-
-      .reset-btn {
-        padding: 3px 8px;
-        opacity: 1 !important;
-      }
-
-      .copy-btn:hover {
-        background: #f8f9fa;
-        border-color: #a8edea;
-      }
-
-      .content-section:hover .copy-btn {
-        opacity: 1;
-      }
-
-      .session-content {
-        display: flex;
-        flex-direction: column;
-        gap: 15px;
-        padding: 8px;
-      }
-
-      .content-section {
-        flex: 0 0 auto;
-        position: relative;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #e1e5e9;
-      }
-
-      .content-section > h4 {
-        position: relative;
-        margin: 0 0 10px 0;
-        color: #495057;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        white-space: nowrap;
-        overflow: hidden;
-      }
-
-      .content-section > h4 small {
-        color: #6c757d;
-        font-size: 12px;
-        font-weight: normal;
-      }
-
-      .content-section > h4:has(input:checked) + .rendered-content {
-        position: relative;
-        max-height: 10em;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .role-section {
-        position: relative;
-        background: #f8f9fa;
-      }
-
-      .role-section:has(input:checked):after {
-        content: '';
-        display: block;
-        position: absolute;
-        z-index: 1;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 50%;
-        background: linear-gradient(
-          to bottom,
-          rgba(255, 255, 255, 0) 0%,
-          rgba(248, 249, 250, 1) 80%,
-          rgba(248, 249, 250, 1) 100%
-        );
-        pointer-events: none;
-      }
-
-      .question-section {
-        background: linear-gradient(
-          135deg,
-          rgba(168, 237, 234, 0.18),
-          rgba(254, 214, 227, 0.18)
-        );
-      }
-
-      .answer-section {
-        background: #ffffff;
-      }
-
-      .markdown-body {
-        background: none;
-        white-space-collapse: collapse;
-        overflow-x: auto;
-        max-width: 100%;
-        word-wrap: break-word;
-      }
-
-      /* 表格样式 - 防止溢出 */
-      .markdown-body table {
-        max-width: 100%;
-        width: 100%;
-        table-layout: auto;
-        border-collapse: collapse;
-        margin: 1em 0;
-        font-size: 0.9em;
-      }
-
-      .markdown-body th,
-      .markdown-body td {
-        padding: 8px 12px;
-        border: 1px solid #e1e5e9;
-        text-align: left;
-        vertical-align: top;
-        word-break: break-word;
-        min-width: 0;
-      }
-
-      .markdown-body th {
-        background-color: #f8f9fa;
-        font-weight: 600;
-      }
-
-      /* 表格容器 - 提供水平滚动 */
-      .rendered-content {
-        position: relative;
-        line-height: 1.6;
-        overflow-x: auto;
-        overflow-y: visible;
-        max-width: 100%;
-      }
-
-      .rendered-content p {
-        margin: 0.5em 0;
-      }
-
-      .rendered-content code {
-        background: #f1f3f5;
-        padding: 2px 4px;
-        border-radius: 3px;
-        white-space: pre-wrap !important;
-        word-break: break-all !important;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 0.9em;
-      }
-
-      .rendered-content pre {
-        background: #f8f9fa;
-        border: 1px solid #e1e5e9;
-        padding: 15px;
-        border-radius: 8px;
-        overflow-x: auto;
-        white-space-collapse: collapse;
-        margin: 1em 0;
-      }
-
-      .rendered-content pre code {
-        background: none;
-        padding: 0;
-      }
-
-      .rendered-content blockquote {
-        border-left: 4px solid #a8edea;
-        margin: 1em 0;
-        padding-left: 1em;
-        color: #666;
-      }
-
-      .streaming-answer {
-        min-height: 1.5em;
-      }
-    </style>
   </head>
 
   <body>
@@ -2514,26 +2954,26 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           v-cloak
           style="display: none"
         >
-          <!-- API Key 设置 -->
-          <div class="api-key-section">
-            <label
-              for="apiKey"
-              style="display: block; margin-bottom: 8px; font-weight: 500"
-              @dblclick="reloadPage()"
-              >API Key:</label
+          <!-- 设置按钮 -->
+          <div class="settings-section">
+            <button
+              class="settings-btn"
+              :class="{ mobile: isMobile }"
+              @click="openSettingsModal()"
             >
-            <input
-              type="password"
-              id="apiKey"
-              v-model="apiKey"
-              @input="saveApiKey"
-              class="api-key-input"
-              placeholder="请输入您的 OpenAI API Key"
-              autocomplete="new-password"
-            />
+              ⚙️ 设置
+              <span v-if="!apiKey" style="color: #e74c3c; margin-left: 4px"
+                >(未配置)</span
+              >
+              <span
+                v-else-if="storageMode === 'webdav'"
+                style="color: #5fbdbd; margin-left: 4px"
+                >(远程存储)</span
+              >
+            </button>
           </div>
           <!-- 角色设定 -->
-          <div class="role-setting">
+          <div v-show="!isLoadingRemoteSessions" class="role-setting">
             <label
               for="rolePrompt"
               style="
@@ -2593,13 +3033,27 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             </textarea>
           </div>
           <!-- 新建会话按钮 -->
-          <button @click="createNewSession" class="new-session-btn">
-            + 新建会话
+          <button
+            v-show="!isLoadingRemoteSessions"
+            @click="createNewSession"
+            class="new-session-btn"
+          >
+            ➕ 新建会话
           </button>
           <!-- 会话列表 -->
           <div class="sessions">
+            <!-- 远程加载中的提示 -->
+            <div
+              v-if="isLoadingRemoteSessions"
+              class="loading-remote-sessions"
+              style="margin-top: calc(50vh - 70px - 104px)"
+            >
+              <span class="loading-spinner"></span>
+              <span>正在加载远程数据...</span>
+            </div>
             <div
               v-for="session in sessions"
+              v-show="!isLoadingRemoteSessions"
               :key="session.id"
               @click="switchSession(session.id)"
               :class="['session-item', { active: currentSessionId === session.id }]"
@@ -2620,7 +3074,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           </div>
         </div>
         <!-- 主聊天区域 -->
-        <div class="main-chat">
+        <div class="main-chat" v-show="true" v-cloak style="display: none">
           <!-- 头部 -->
           <div class="header">
             <h2 style="cursor: pointer">
@@ -2688,8 +3142,17 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               v-if="!currentSession || !currentSession.messages || currentSession.messages.length === 0"
               class="empty-state"
             >
-              <h3>开始与 AI 对话</h3>
-              <p>选择一个模型并输入您的问题</p>
+              <div
+                v-if="isLoadingRemoteSessions"
+                class="loading-remote-sessions"
+              >
+                <span class="loading-spinner"></span>
+                <span>正在加载远程数据...</span>
+              </div>
+              <template v-if="!isLoadingRemoteSessions">
+                <h3>开始与 AI 对话</h3>
+                <p>选择一个模型并输入您的问题</p>
+              </template>
             </div>
             <div
               v-if="currentSession && currentSession.messages && currentSession.messages.length > 0"
@@ -2782,6 +3245,21 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                       }}
                     </a>
                   </div>
+                  <!-- 文本附件链接 -->
+                  <div
+                    v-if="msg.plaintexts && msg.plaintexts.length > 0"
+                    class="question-images"
+                  >
+                    <a
+                      v-for="(txt, txtIdx) in msg.plaintexts"
+                      :key="'txt-' + txtIdx"
+                      href="javascript:void(0)"
+                      title="点击预览内容"
+                      @click="previewPlaintext(txt)"
+                    >
+                      📄 {{ txt.name }}
+                    </a>
+                  </div>
                 </div>
                 <!-- AI回答 -->
                 <div
@@ -2871,11 +3349,15 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           </div>
           <!-- 输入区域 -->
           <div class="input-area">
-            <!-- 上传的图片标签 -->
-            <div v-if="uploadedImages.length > 0" class="uploaded-images-tags">
+            <!-- 上传的附件标签（图片和文本文件） -->
+            <div
+              v-if="uploadedImages.length > 0 || uploadedPlaintexts.length > 0"
+              class="uploaded-images-tags"
+            >
+              <!-- 图片标签 -->
               <div
                 v-for="(img, index) in uploadedImages"
-                :key="index"
+                :key="'img-' + index"
                 class="image-tag"
               >
                 <img
@@ -2891,15 +3373,33 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                   ×
                 </button>
               </div>
+              <!-- 文本文件标签 -->
+              <div
+                v-for="(txt, index) in uploadedPlaintexts"
+                :key="'txt-' + index"
+                class="image-tag plaintext-tag"
+                @click="previewPlaintext(txt)"
+                title="点击预览内容"
+              >
+                <span class="plaintext-icon">📄</span>
+                <span class="image-tag-text">{{ txt.name }}</span>
+                <button
+                  class="image-tag-remove"
+                  @click.stop="removePlaintext(index)"
+                  title="移除文件"
+                >
+                  ×
+                </button>
+              </div>
             </div>
 
             <div class="input-wrapper">
-              <!-- 上传图片按钮 -->
+              <!-- 上传按钮（图片或文本文件） -->
               <button
-                class="upload-image-btn"
-                @click="triggerImageUpload"
-                :disabled="!canInput || uploadedImages.length >= 3 || isUploadingImage"
-                :title="uploadedImages.length >= 3 ? '最多上传3张图片' : '上传图片'"
+                class="upload-btn"
+                @click="triggerUpload"
+                :disabled="!canInput || isUploadingImage"
+                title="上传图片或文本文件"
               >
                 📎
               </button>
@@ -2909,6 +3409,13 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 accept="image/*"
                 style="display: none"
                 @change="handleImageSelect"
+              />
+              <input
+                type="file"
+                ref="plaintextInput"
+                :accept="getSupportedTextExtensions().join(',')"
+                style="display: none"
+                @change="handlePlaintextSelect"
               />
 
               <textarea
@@ -3145,9 +3652,259 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           </div>
         </div>
       </div>
+
+      <!-- 设置弹窗模板 -->
+      <div
+        v-if="!isShowSettingsModal"
+        ref="settingsTemplate"
+        style="display: none"
+      >
+        <div style="text-align: left; padding: 0 10px">
+          <!-- API Key 设置 -->
+          <div style="margin-bottom: 20px">
+            <label
+              class="label-api-key"
+              style="
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 600;
+                color: #333;
+              "
+            >
+              🔑 API Key
+            </label>
+            <input
+              type="password"
+              id="settingsApiKey"
+              class="swal-input-custom"
+              placeholder="请输入您的 OpenAI API Key"
+              autocomplete="new-password"
+              style="
+                width: 100%;
+                padding: 10px 12px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                font-size: 14px;
+                box-sizing: border-box;
+              "
+            />
+          </div>
+
+          <!-- 存储模式切换 -->
+          <div style="margin-bottom: 20px">
+            <label
+              style="
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 600;
+                color: #333;
+              "
+            >
+              💾 会话存储模式
+            </label>
+            <div style="display: flex; gap: 12px">
+              <label
+                style="
+                  display: flex;
+                  align-items: center;
+                  cursor: pointer;
+                  padding: 10px 10px;
+                  border: 2px solid #ddd;
+                  border-radius: 8px;
+                  flex: 1;
+                  transition: all 0.2s;
+                "
+                class="storage-mode-option"
+                data-mode="local"
+              >
+                <input
+                  type="radio"
+                  name="storageMode"
+                  value="local"
+                  style="margin-right: 8px"
+                />
+                <span style="font-size: 0.85em">
+                  <span v-if="isMobile">📱</span>
+                  <span v-else>🖥️</span>
+                  <span> 本地存储</span>
+                </span>
+              </label>
+              <label
+                style="
+                  display: flex;
+                  align-items: center;
+                  cursor: pointer;
+                  padding: 10px 10px;
+                  border: 2px solid #ddd;
+                  border-radius: 8px;
+                  flex: 1;
+                  transition: all 0.2s;
+                "
+                class="storage-mode-option"
+                data-mode="webdav"
+              >
+                <input
+                  type="radio"
+                  name="storageMode"
+                  value="webdav"
+                  style="margin-right: 8px"
+                />
+                <span style="font-size: 0.85em">☁️ 远程存储</span>
+              </label>
+            </div>
+            <p style="margin: 8px 0 0; font-size: 12px; color: #888">
+              <span>本地存储：数据保存在浏览器中</span>
+              <br v-if="isMobile" />
+              <span v-else>；</span>
+              <span>远程存储：通过 WebDAV 同步到云端</span>
+            </p>
+          </div>
+
+          <!-- WebDAV 配置 -->
+          <div
+            id="webdavConfigSection"
+            style="
+              display: none;
+              padding: 16px;
+              background: #f8f9fa;
+              border-radius: 8px;
+              margin-bottom: 10px;
+            "
+          >
+            <label
+              style="
+                display: block;
+                margin-bottom: 12px;
+                font-weight: 600;
+                color: #333;
+              "
+            >
+              ⚙️ WebDAV 配置
+            </label>
+            <div style="margin-bottom: 12px">
+              <label
+                style="
+                  display: block;
+                  margin-bottom: 4px;
+                  font-size: 13px;
+                  color: #555;
+                "
+                >服务器地址</label
+              >
+              <input
+                type="text"
+                id="webdavUrl"
+                placeholder="http://dav.test.cn:3000"
+                style="
+                  width: 100%;
+                  padding: 8px 12px;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  font-size: 14px;
+                  box-sizing: border-box;
+                "
+              />
+            </div>
+            <div style="margin-bottom: 12px">
+              <label
+                style="
+                  display: block;
+                  margin-bottom: 4px;
+                  font-size: 13px;
+                  color: #555;
+                "
+                >用户名</label
+              >
+              <input
+                type="text"
+                id="webdavUsername"
+                placeholder="用户名"
+                style="
+                  width: 100%;
+                  padding: 8px 12px;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  font-size: 14px;
+                  box-sizing: border-box;
+                "
+              />
+            </div>
+            <div style="margin-bottom: 12px">
+              <label
+                style="
+                  display: block;
+                  margin-bottom: 4px;
+                  font-size: 13px;
+                  color: #555;
+                "
+                >密码</label
+              >
+              <input
+                type="password"
+                id="webdavPassword"
+                placeholder="密码"
+                autocomplete="new-password"
+                style="
+                  width: 100%;
+                  padding: 8px 12px;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  font-size: 14px;
+                  box-sizing: border-box;
+                "
+              />
+            </div>
+            <div style="margin-bottom: 12px">
+              <label
+                style="
+                  display: block;
+                  margin-bottom: 4px;
+                  font-size: 13px;
+                  color: #555;
+                "
+                >存储路径</label
+              >
+              <input
+                type="text"
+                id="webdavPath"
+                placeholder="/openai-chat/"
+                style="
+                  width: 100%;
+                  padding: 8px 12px;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  font-size: 14px;
+                  box-sizing: border-box;
+                "
+              />
+              <p style="margin: 4px 0 0; font-size: 11px; color: #888">
+                应以'/'结束，留空则使用默认路径 /openai-chat/
+              </p>
+            </div>
+            <button
+              type="button"
+              id="testWebdavBtn"
+              style="
+                width: 100%;
+                padding: 10px;
+                background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                cursor: pointer;
+                font-weight: 500;
+              "
+            >
+              🔗 测试连接
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
+      const $ = selector => document.querySelector(selector);
+      const $$ = selector => Array.from(document.querySelectorAll(selector));
       const { createApp } = Vue;
 
       window.app = createApp({
@@ -3156,6 +3913,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             apiKey: '',
             messageInput: '',
             isLoading: false,
+            isShowSettingsModal: false,
             isSentForAWhile: false,
             errorMessage: '',
             selectedModel: '',
@@ -3173,12 +3931,22 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             streamingContent: '',
             abortController: null,
             uploadedImages: [], // 待发送的图片列表 [{ url: string, file: File }]
+            uploadedPlaintexts: [], // 待发送的文本文件列表 [{ name: string, content: string }]
             isUploadingImage: false,
             needSearch: false,
             searchRes: null,
             tomSelect: null,
             sidebarHashAdded: false, // 标记是否为侧边栏添加了hash
-            swalHashAdded: false // 标记是否为弹窗添加了hash
+            swalHashAdded: false, // 标记是否为弹窗添加了hash
+            isLoadingRemoteSessions: false, // 是否正在加载远程会话数据
+            // 存储模式相关
+            storageMode: 'local', // 'local' 或 'webdav'
+            webdavConfig: {
+              url: '',
+              username: '',
+              password: '',
+              path: '/openai-chat/'
+            }
           };
         },
         computed: {
@@ -3231,6 +3999,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             var suffix = this.getRolePrompt() ? ' (role ✓)' : '';
             if (!this.apiKey) {
               return '请先在左上角设置 API Key';
+            } else if (this.isLoadingRemoteSessions) {
+              return '正在加载远程数据...';
             } else if (this.isLoading) {
               return 'AI 正在思考中...';
             } else if (this.isStreaming) {
@@ -3251,6 +4021,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             var session = this.currentSession;
             return (
               this.apiKey &&
+              !this.isLoadingRemoteSessions &&
               !this.isLoading &&
               !this.isStreaming &&
               !this.isMaxMessagesReached
@@ -3258,7 +4029,9 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
           canSend() {
             return (
-              (this.messageInput.trim() || this.uploadedImages.length > 0) &&
+              (this.messageInput.trim() ||
+                this.uploadedImages.length > 0 ||
+                this.uploadedPlaintexts.length > 0) &&
               this.selectedModel &&
               !this.isUploadingImage &&
               this.canInput
@@ -3292,6 +4065,14 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         },
         async mounted() {
           this.initModels();
+          this.$nextTick(() => {
+            this.initTomSelect();
+          });
+
+          // 加载WebDAV配置
+          await window.openaiDB.loadWebDAVConfig();
+          this.storageMode = window.openaiDB.webdavEnabled ? 'webdav' : 'local';
+          this.webdavConfig = Object.assign({}, window.openaiDB.webdavConfig);
 
           // 初始化 IndexedDB
           await window.openaiDB.init();
@@ -3332,10 +4113,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             ]
           });
 
-          await this.loadData();
-          if (this.sessions.length === 0) {
-            this.createNewSession();
-          }
           // 检测是否为移动端
           this.checkMobile();
           window.addEventListener('resize', this.checkMobile);
@@ -3343,28 +4120,32 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           // 监听浏览器后退事件（移动端体验优化）
           window.addEventListener('popstate', this.handlePopState);
 
+          // 页面关闭前同步 WebDAV 数据
+          window.addEventListener('beforeunload', this.handleBeforeUnload);
+
+          await this.loadData();
+          if (this.sessions.length === 0) {
+            this.createNewSession();
+          }
           // 计算OpenAI DB总数据量
           const totalDataSize = await window.openaiDB.getTotalDataSize();
-          if (totalDataSize > 2) {
+          if (totalDataSize > 3) {
             this.showSwal({
               title: '数据量过大',
               text:
                 '当前存储的数据量为' +
                 totalDataSize.toFixed(2) +
-                ' MB，超过了 2MB，可能会影响性能。建议清理一些旧会话。',
+                ' MB，超过了 3MB，可能会影响性能。建议清理一些旧会话。',
               icon: 'warning',
               confirmButtonText: '&nbsp;知道了&nbsp;'
             });
           }
-
-          this.$nextTick(() => {
-            this.initTomSelect();
-          });
         },
 
         beforeUnmount() {
           window.removeEventListener('resize', this.checkMobile);
           window.removeEventListener('popstate', this.handlePopState);
+          window.removeEventListener('beforeunload', this.handleBeforeUnload);
         },
         watch: {
           messageInput() {
@@ -3425,6 +4206,15 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             }
           },
 
+          // 页面关闭前同步 WebDAV 数据
+          handleBeforeUnload(event) {
+            // 使用 sendBeacon 或同步方式确保数据发送
+            if (window.openaiDB && window.openaiDB._pendingWebdavData) {
+              // 尝试立即同步（注意：beforeunload 中异步操作可能不会完成）
+              window.openaiDB.flushWebdavSync();
+            }
+          },
+
           // 包装Swal.fire以支持移动端hash管理
           showSwal(options, addHash = true) {
             const isMobile = this.isMobile;
@@ -3471,10 +4261,349 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             }
           },
 
+          // 打开设置弹窗
+          openSettingsModal() {
+            var template = this.$refs.settingsTemplate;
+            if (!template) return;
+            var htmlContent = template.innerHTML;
+
+            Swal.fire({
+              title: '⚙️ 设置',
+              html: htmlContent,
+              width: this.isMobile ? '95%' : '500px',
+              showCancelButton: true,
+              confirmButtonText: '保存',
+              cancelButtonText: '取消',
+              confirmButtonColor: '#5fbdbd',
+              allowOutsideClick: false,
+              showCloseButton: false,
+              reverseButtons: true,
+              didOpen: async () => {
+                this.isShowSettingsModal = true;
+                await this.$nextTick();
+                // 填充当前值
+                var apiKeyInput = $('#settingsApiKey');
+                if (apiKeyInput) apiKeyInput.value = this.apiKey || '';
+
+                var localRadio = $('input[name="storageMode"][value="local"]');
+                var webdavRadio = $(
+                  'input[name="storageMode"][value="webdav"]'
+                );
+                if (this.storageMode === 'webdav' && webdavRadio) {
+                  webdavRadio.checked = true;
+                } else if (localRadio) {
+                  localRadio.checked = true;
+                }
+
+                // 填充WebDAV配置
+                var urlInput = $('#webdavUrl');
+                var usernameInput = $('#webdavUsername');
+                var passwordInput = $('#webdavPassword');
+                var pathInput = $('#webdavPath');
+                if (urlInput) urlInput.value = this.webdavConfig.url || '';
+                if (usernameInput)
+                  usernameInput.value = this.webdavConfig.username || '';
+                if (passwordInput)
+                  passwordInput.value = this.webdavConfig.password || '';
+                if (pathInput)
+                  pathInput.value = this.webdavConfig.path || '/openai-chat/';
+
+                // 显示/隐藏WebDAV配置区域
+                var webdavSection = $('#webdavConfigSection');
+                if (webdavSection) {
+                  webdavSection.style.display =
+                    this.storageMode === 'webdav' ? 'block' : 'none';
+                }
+
+                // 更新选中状态样式
+                this.updateStorageModeStyle();
+
+                // 绑定存储模式切换事件
+                var radios = $$('input[name="storageMode"]');
+                radios.forEach(radio => {
+                  radio.addEventListener('change', () => {
+                    var webdavSection = $('#webdavConfigSection');
+                    if (webdavSection) {
+                      webdavSection.style.display =
+                        radio.value === 'webdav' ? 'block' : 'none';
+                    }
+                    this.updateStorageModeStyle();
+                  });
+                });
+
+                // 绑定测试按钮事件
+                var testBtn = $('#testWebdavBtn');
+                if (testBtn) {
+                  testBtn.addEventListener('click', () => {
+                    this.testWebDAVFromModal();
+                  });
+                }
+
+                var title = $('.swal2-modal .swal2-title');
+                if (title) {
+                  title.addEventListener('dblclick', () => {
+                    this.reloadPage();
+                  });
+                }
+              },
+              preConfirm: async () => {
+                const isValid = await this.validateAndSaveSettings();
+                if (isValid) {
+                  this.isShowSettingsModal = false;
+                }
+                return isValid;
+              }
+            }).then(() => {
+              this.isShowSettingsModal = false;
+            });
+          },
+
+          // 更新存储模式选项样式
+          updateStorageModeStyle() {
+            var options = $$('.storage-mode-option');
+            options.forEach(option => {
+              var radio = option.querySelector('input[type="radio"]');
+              if (radio && radio.checked) {
+                option.style.borderColor = '#5fbdbd';
+                option.style.background = 'rgba(95, 189, 189, 0.1)';
+              } else {
+                option.style.borderColor = '#ddd';
+                option.style.background = 'transparent';
+              }
+            });
+          },
+
+          // 从弹窗中测试WebDAV连接
+          async testWebDAVFromModal() {
+            var urlInput = $('#webdavUrl');
+            var usernameInput = $('#webdavUsername');
+            var passwordInput = $('#webdavPassword');
+            var pathInput = $('#webdavPath');
+            var testBtn = $('#testWebdavBtn');
+            var config = {
+              url: urlInput ? urlInput.value.trim() : '',
+              username: usernameInput ? usernameInput.value.trim() : '',
+              password: passwordInput ? passwordInput.value : '',
+              path: (pathInput ? pathInput.value.trim() : '') || '/openai-chat/'
+            };
+
+            // 基本验证
+            if (!config.url) {
+              this.showToast('请输入服务器地址', 'error');
+              return;
+            }
+            if (!config.username) {
+              this.showToast('请输入用户名', 'error');
+              return;
+            }
+            if (!config.password) {
+              this.showToast('请输入密码', 'error');
+              return;
+            }
+
+            // 显示测试中状态
+            if (testBtn) {
+              testBtn.disabled = true;
+              testBtn.textContent = '⏳ 测试中...';
+            }
+
+            var result = await window.openaiDB.testWebDAVConnection(config);
+
+            if (testBtn) {
+              testBtn.disabled = false;
+              testBtn.textContent = '🔗 测试连接';
+            }
+
+            if (result.success) {
+              this.showToast('连接成功！', 'success');
+            } else {
+              this.showToast('连接失败: ' + result.error, 'error');
+            }
+          },
+
+          // 显示Toast提示（不影响Swal弹窗）
+          showToast(message, icon) {
+            // 创建toast容器（如果不存在）
+            var container = $('#custom-toast-container');
+            if (!container) {
+              container = document.createElement('div');
+              container.id = 'custom-toast-container';
+              container.style.cssText =
+                'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 99999; display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none;';
+              document.body.appendChild(container);
+            }
+
+            // 创建toast元素
+            var toast = document.createElement('div');
+            toast.style.cssText =
+              'padding: 12px 20px; border-radius: 8px; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; align-items: center; gap: 8px; font-size: 14px; opacity: 0; transform: translateY(-10px); transition: all 0.3s ease; pointer-events: auto;';
+
+            // 根据icon类型设置颜色和图标
+            var iconEmoji = '💬';
+            var bgColor = '#fff';
+            var borderColor = '#e0e0e0';
+            if (icon === 'success') {
+              iconEmoji = '✅';
+              borderColor = '#5fbdbd';
+            } else if (icon === 'error') {
+              iconEmoji = '❌';
+              borderColor = '#e74c3c';
+            } else if (icon === 'warning') {
+              iconEmoji = '⚠️';
+              borderColor = '#f39c12';
+            } else if (icon === 'info') {
+              iconEmoji = 'ℹ️';
+              borderColor = '#3498db';
+            }
+            toast.style.borderLeft = '4px solid ' + borderColor;
+
+            toast.innerHTML =
+              '<span style="font-size: 16px;">' +
+              iconEmoji +
+              '</span><span>' +
+              message +
+              '</span>';
+            container.appendChild(toast);
+
+            // 显示动画
+            requestAnimationFrame(() => {
+              toast.style.opacity = '1';
+              toast.style.transform = 'translateY(0)';
+            });
+
+            // 3秒后隐藏并移除
+            this.sleep(3000).then(() => {
+              toast.style.opacity = '0';
+              toast.style.transform = 'translateY(-10px)';
+              this.sleep(300).then(() => {
+                if (toast.parentNode) {
+                  toast.parentNode.removeChild(toast);
+                }
+              });
+            });
+          },
+
+          // 验证并保存设置
+          async validateAndSaveSettings() {
+            var apiKeyInput = $('#settingsApiKey');
+            var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+
+            var storageModeRadio = $('input[name="storageMode"]:checked');
+            var storageMode = storageModeRadio
+              ? storageModeRadio.value
+              : 'local';
+
+            // API Key 验证
+            if (!apiKey) {
+              this.showToast('请输入 API Key', 'error');
+              return false;
+            }
+
+            // 在保存前记录旧的存储模式，用于后续判断是否切换了模式
+            var oldMode = window.openaiDB.webdavEnabled ? 'webdav' : 'local';
+
+            // 如果选择了WebDAV，验证配置
+            if (storageMode === 'webdav') {
+              var urlInput = $('#webdavUrl');
+              var usernameInput = $('#webdavUsername');
+              var passwordInput = $('#webdavPassword');
+              var pathInput = $('#webdavPath');
+
+              var webdavConfig = {
+                url: urlInput ? urlInput.value.trim() : '',
+                username: usernameInput ? usernameInput.value.trim() : '',
+                password: passwordInput ? passwordInput.value : '',
+                path:
+                  (pathInput ? pathInput.value.trim() : '') || '/openai-chat/'
+              };
+
+              // WebDAV必填项验证
+              if (!webdavConfig.url) {
+                this.showToast('请输入 WebDAV 服务器地址', 'error');
+                return false;
+              }
+              if (!webdavConfig.username) {
+                this.showToast('请输入 WebDAV 用户名', 'error');
+                return false;
+              }
+              if (!webdavConfig.password) {
+                this.showToast('请输入 WebDAV 密码', 'error');
+                return false;
+              }
+
+              // WebDAV连通性测试
+              Swal.showLoading();
+              var result = await window.openaiDB.testWebDAVConnection(
+                webdavConfig
+              );
+              if (!result.success) {
+                Swal.hideLoading();
+                this.showToast('WebDAV 连接失败: ' + result.error, 'error');
+                return false;
+              }
+
+              // 保存WebDAV配置
+              this.webdavConfig = webdavConfig;
+              await window.openaiDB.saveWebDAVConfig(true, webdavConfig);
+              this.storageMode = 'webdav';
+            } else {
+              // 本地存储模式
+              await window.openaiDB.saveWebDAVConfig(false, this.webdavConfig);
+              this.storageMode = 'local';
+            }
+
+            // 保存API Key
+            this.apiKey = apiKey;
+            await this.saveApiKey();
+
+            // 如果切换了存储模式，需要重新加载数据
+            if (oldMode !== storageMode) {
+              // 重新加载会话数据
+              this.showToast('存储模式已切换，正在重新加载数据...', 'info');
+              await this.loadSessions();
+            }
+
+            this.showToast('设置已保存', 'success');
+            return true;
+          },
+
+          // 加载会话数据（独立方法）
+          async loadSessions() {
+            var savedSessions = await window.openaiDB.getItem(
+              'openai_sessions'
+            );
+            if (savedSessions) {
+              var parsed = JSON.parse(savedSessions);
+              var migratedSessions = this.migrateSessionData(parsed);
+              if (migratedSessions) {
+                this.sessions = migratedSessions;
+              } else {
+                this.sessions = parsed;
+              }
+            } else {
+              this.sessions = [];
+            }
+
+            // 加载当前会话ID
+            var savedCurrentId = await window.openaiDB.getItem(
+              'openai_current_session'
+            );
+            if (
+              savedCurrentId &&
+              this.sessions.find(s => s.id === savedCurrentId)
+            ) {
+              this.currentSessionId = savedCurrentId;
+            } else if (this.sessions.length > 0) {
+              this.currentSessionId = this.sessions[0].id;
+            } else {
+              this.createNewSession();
+            }
+          },
+
           initTomSelect() {
             if (this.tomSelect) return;
             if (this.availableModels.length <= 10) return;
-            const el = document.getElementById('selectedModel');
+            const el = $('#selectedModel');
             if (!el) return;
             const config = {
               plugins: ['dropdown_input'],
@@ -3509,9 +4638,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               },
               onDelete: () => false,
               onInitialize: () => {
-                const input = document.querySelector(
-                  '.dropdown-input-wrap input'
-                );
+                const input = $('.dropdown-input-wrap input');
                 if (!input) return;
                 input.style.paddingLeft = '12px';
                 input.style.paddingRight = '12px';
@@ -3564,6 +4691,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                     .replace('Cs/', 'CS/')
                     .replace('Iflow/', 'iFlow/')
                     .replace('Gcli', 'gCLI')
+                    .replace('Cpa/', 'CPA/')
                     .replace('B4u/', 'B4U/')
                     .replace('Kfc/', 'KFC/')
                     .replace('/', ' / ');
@@ -3729,38 +4857,10 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 'openai_global_role_prompt_enabled'
               )) !== false;
 
-            // 加载会话数据
-            const savedSessions = await window.openaiDB.getItem(
-              'openai_sessions'
-            );
-            if (savedSessions) {
-              let parsed = JSON.parse(savedSessions);
-              // 执行数据迁移
-              const migratedSessions = this.migrateSessionData(parsed);
-              if (migratedSessions) {
-                this.sessions = migratedSessions;
-                // 迁移后保存
-                this.sleep(300).then(() => {
-                  this.saveData();
-                });
-              } else {
-                this.sessions = parsed;
-              }
-            }
-
             // 加载当前会话ID
             const savedCurrentId = await window.openaiDB.getItem(
               'openai_current_session'
             );
-            if (
-              savedCurrentId &&
-              this.sessions.find(s => s.id === savedCurrentId)
-            ) {
-              this.currentSessionId = savedCurrentId;
-            } else if (this.sessions.length > 0) {
-              this.currentSessionId = this.sessions[0].id;
-            }
-            this.autoFoldRolePrompt();
 
             // 加载选中的模型
             const savedModel = await window.openaiDB.getItem(
@@ -3798,6 +4898,36 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
             // 加载当前会话的草稿
             this.loadDraftFromCurrentSession();
+
+            // 加载会话数据
+            const savedSessions = await window.openaiDB.getItem(
+              'openai_sessions'
+            );
+            if (savedSessions) {
+              let parsed = JSON.parse(savedSessions);
+              // 执行数据迁移
+              const migratedSessions = this.migrateSessionData(parsed);
+              if (migratedSessions) {
+                this.sessions = migratedSessions;
+                // 迁移后保存
+                this.sleep(300).then(() => {
+                  this.saveData();
+                });
+              } else {
+                this.sessions = parsed;
+              }
+            }
+
+            // 设置当前会话ID
+            if (
+              savedCurrentId &&
+              this.sessions.find(s => s.id === savedCurrentId)
+            ) {
+              this.currentSessionId = savedCurrentId;
+            } else if (this.sessions.length > 0) {
+              this.currentSessionId = this.sessions[0].id;
+            }
+            this.autoFoldRolePrompt();
 
             // 首次向用户询问 API Key
             if (!this.apiKey && this.isTotallyBlank) {
@@ -3985,11 +5115,318 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             this.updateGlobalRolePrompt();
           },
 
+          // 触发上传（图片或文本文件）
+          triggerUpload() {
+            this.showSwal({
+              title: '选择上传类型',
+              showCancelButton: true,
+              showDenyButton: true,
+              confirmButtonText: '📷 图片',
+              denyButtonText: '📄 文本文件',
+              cancelButtonText: '取消',
+              confirmButtonColor: '#5fbdbd',
+              denyButtonColor: '#9b8ed4',
+              reverseButtons: false
+            }).then(result => {
+              if (result.isConfirmed) {
+                this.triggerImageUpload();
+              } else if (result.isDenied) {
+                this.triggerPlaintextUpload();
+              }
+            });
+          },
+
           // 触发图片上传
           triggerImageUpload() {
-            if (this.uploadedImages.length >= 3) return;
+            if (this.uploadedImages.length >= 5) {
+              this.showSwal({
+                title: '无法上传',
+                text: '最多只能上传5张图片',
+                icon: 'warning',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
             this.preheatImageUploadService();
             this.$refs.imageInput.click();
+          },
+
+          // 触发文本文件上传
+          triggerPlaintextUpload() {
+            if (this.uploadedPlaintexts.length >= 5) {
+              this.showSwal({
+                title: '无法上传',
+                text: '最多只能上传5个文本文件',
+                icon: 'warning',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
+            this.$refs.plaintextInput.click();
+          },
+
+          // 获取支持的文本文件后缀列表
+          getSupportedTextExtensions() {
+            return [
+              '.txt',
+              '.md',
+              '.markdown',
+              '.html',
+              '.htm',
+              '.xml',
+              '.json',
+              '.js',
+              '.jsx',
+              '.ts',
+              '.tsx',
+              '.vue',
+              '.svelte',
+              '.css',
+              '.scss',
+              '.sass',
+              '.less',
+              '.styl',
+              '.py',
+              '.pyw',
+              '.pyi',
+              '.rb',
+              '.php',
+              '.java',
+              '.kt',
+              '.kts',
+              '.c',
+              '.cpp',
+              '.cc',
+              '.cxx',
+              '.h',
+              '.hpp',
+              '.hxx',
+              '.cs',
+              '.go',
+              '.rs',
+              '.swift',
+              '.m',
+              '.mm',
+              '.sh',
+              '.bash',
+              '.zsh',
+              '.fish',
+              '.ps1',
+              '.bat',
+              '.cmd',
+              '.sql',
+              '.graphql',
+              '.gql',
+              '.yaml',
+              '.yml',
+              '.toml',
+              '.ini',
+              '.conf',
+              '.cfg',
+              '.env',
+              '.log',
+              '.csv',
+              '.tsv',
+              '.tex',
+              '.bib',
+              '.rst',
+              '.adoc',
+              '.org',
+              '.gitignore',
+              '.dockerignore',
+              '.editorconfig',
+              '.eslintrc',
+              '.prettierrc',
+              '.babelrc',
+              '.htaccess',
+              '.nginx',
+              '.conf',
+              '.r',
+              '.R',
+              '.rmd',
+              '.Rmd',
+              '.lua',
+              '.pl',
+              '.pm',
+              '.tcl',
+              '.awk',
+              '.sed',
+              '.vim',
+              '.vimrc',
+              '.emacs',
+              '.el',
+              '.proto',
+              '.thrift',
+              '.avsc',
+              '.tf',
+              '.tfvars',
+              '.hcl',
+              '.gradle',
+              '.properties',
+              '.pom',
+              '.cmake',
+              '.make',
+              '.makefile',
+              '.mk',
+              '.asm',
+              '.s',
+              '.nasm',
+              '.patch',
+              '.diff'
+            ];
+          },
+
+          // 处理文本文件选择
+          async handlePlaintextSelect(event) {
+            var file = event.target.files[0];
+            if (!file) return;
+            await this.processPlaintextFile(file);
+            event.target.value = ''; // 清空input,允许重复选择同一文件
+          },
+
+          // 处理文本文件（公共逻辑）
+          async processPlaintextFile(file) {
+            // 检查文件数量限制
+            if (this.uploadedPlaintexts.length >= 5) {
+              this.showSwal({
+                title: '无法上传',
+                text: '最多只能上传5个文本文件',
+                icon: 'warning',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
+
+            // 检查文件后缀
+            var fileName = file.name || '';
+            var ext =
+              fileName.lastIndexOf('.') > -1
+                ? fileName.substring(fileName.lastIndexOf('.')).toLowerCase()
+                : '';
+            var supportedExts = this.getSupportedTextExtensions();
+            // 如果有后缀但不在支持列表中，提示用户
+            if (ext && supportedExts.indexOf(ext) === -1) {
+              this.showSwal({
+                title: '不支持的文件类型',
+                text: '请选择文本文件，如 .txt, .md, .js, .py 等',
+                icon: 'error',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
+
+            // 检查文件大小 (限制1MB)
+            if (file.size > 1 * 1024 * 1024) {
+              this.showSwal({
+                title: '文件过大',
+                text: '文本文件大小不能超过1MB',
+                icon: 'error',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
+
+            // 检查是否已经上传过同名文件
+            var isDuplicate = this.uploadedPlaintexts.some(
+              item => item.name === fileName
+            );
+            if (isDuplicate) {
+              this.showSwal({
+                title: '文件已存在',
+                text: '已经上传过同名文件: ' + fileName,
+                icon: 'warning',
+                confirmButtonText: '确定'
+              });
+              return;
+            }
+
+            // 读取文件内容
+            try {
+              var content = await this.readFileAsText(file);
+              this.uploadedPlaintexts.push({
+                name: fileName,
+                content: content
+              });
+            } catch (error) {
+              console.error('读取文件失败:', error);
+              this.showSwal({
+                title: '读取失败',
+                text: '无法读取文件内容，请确保是有效的文本文件',
+                icon: 'error',
+                confirmButtonText: '确定'
+              });
+            }
+          },
+
+          // 读取文件为文本
+          readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+              var reader = new FileReader();
+              reader.onload = () => {
+                resolve(reader.result);
+              };
+              reader.onerror = () => {
+                reject(reader.error);
+              };
+              reader.readAsText(file, 'UTF-8');
+            });
+          },
+
+          // 移除文本文件
+          removePlaintext(index) {
+            this.uploadedPlaintexts.splice(index, 1);
+          },
+
+          // 清空上传的文本文件
+          clearUploadedPlaintexts() {
+            this.uploadedPlaintexts = [];
+          },
+
+          // 预览文本文件内容
+          previewPlaintext(item) {
+            var content = item.content || '';
+            // 截取前3000字符预览
+            var previewContent =
+              content.length > 3000
+                ? content.substring(0, 3000) + '\\n\\n... (内容过长，已截断)'
+                : content;
+            this.showSwal({
+              title: item.name,
+              html:
+                '<pre style="text-align: left; max-height: 60vh; overflow: auto; white-space: pre-wrap; word-wrap: break-word; background: #f5f5f5; padding: 12px; border-radius: 8px; font-size: 13px;">' +
+                this.escapeHtml(previewContent) +
+                '</pre>',
+              width: this.isMobile ? '95%' : '700px',
+              showConfirmButton: true,
+              confirmButtonText: '关闭'
+            });
+          },
+
+          // HTML转义
+          escapeHtml(text) {
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+          },
+
+          // 构建附件内容字符串
+          buildAttachmentContent(plaintexts) {
+            if (!plaintexts || plaintexts.length === 0) return '';
+            var lines = [];
+            lines.push(
+              '\\n\\n---\\n\\n## 附件\\n\\n**以下是用户提供的附件内容，以 \`<User_Attachment_数字>\` 包裹：**'
+            );
+            for (var i = 0; i < plaintexts.length; i++) {
+              var item = plaintexts[i];
+              var num = i + 1;
+              lines.push('\\n\\n---\\n\\n### 附件 ' + num + ':\\n\\n');
+              lines.push(
+                '<User_Attachment_' + num + ' filename="' + item.name + '">'
+              );
+              lines.push(item.content);
+              lines.push('</User_Attachment_' + num + '>');
+            }
+            return lines.join('\\n');
           },
 
           // 预先调用上传图片服务的/health接口,以减少首次上传延迟
@@ -4002,24 +5439,24 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
           // 处理粘贴事件
           async handlePaste(event) {
-            const clipboardData = event.clipboardData || window.clipboardData;
+            var clipboardData = event.clipboardData || window.clipboardData;
             if (!clipboardData) return;
-            const items = clipboardData.items;
+            var items = clipboardData.items;
             if (!items || !items.length) return;
 
-            // 遍历剪贴板项目，查找图片
-            for (let i = 0; i < items.length; i++) {
-              const item = items[i];
+            // 遍历剪贴板项目
+            for (var i = 0; i < items.length; i++) {
+              var item = items[i];
 
               // 检查是否为图片类型
               if (item.type.startsWith('image/')) {
                 event.preventDefault(); // 阻止默认粘贴行为
 
                 // 检查是否已达到上传限制
-                if (this.uploadedImages.length >= 3) {
+                if (this.uploadedImages.length >= 5) {
                   this.showSwal({
                     title: '无法上传',
-                    text: '最多只能上传3张图片',
+                    text: '最多只能上传5张图片',
                     icon: 'warning',
                     confirmButtonText: '确定'
                   });
@@ -4027,7 +5464,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 }
 
                 // 获取图片文件
-                const file = item.getAsFile();
+                var file = item.getAsFile();
                 if (!file) continue;
 
                 // 检查文件大小 (限制10MB)
@@ -4047,6 +5484,36 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 // 上传图片
                 await this.uploadImageFile(file);
                 return; // 只处理第一张图片
+              }
+
+              // 检查是否为文本文件类型
+              if (
+                item.kind === 'file' &&
+                (item.type.startsWith('text/') ||
+                  item.type === 'application/json' ||
+                  item.type === 'application/javascript' ||
+                  item.type === 'application/xml' ||
+                  item.type === '')
+              ) {
+                var textFile = item.getAsFile();
+                if (!textFile) continue;
+
+                // 检查文件名后缀是否支持
+                var fileName = textFile.name || '';
+                var ext =
+                  fileName.lastIndexOf('.') > -1
+                    ? fileName
+                        .substring(fileName.lastIndexOf('.'))
+                        .toLowerCase()
+                    : '';
+                var supportedExts = this.getSupportedTextExtensions();
+
+                // 如果有后缀且在支持列表中，处理文本文件
+                if (ext && supportedExts.indexOf(ext) !== -1) {
+                  event.preventDefault();
+                  await this.processPlaintextFile(textFile);
+                  return;
+                }
               }
             }
           },
@@ -4274,10 +5741,11 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
 
           copyToClipboard(text) {
-            text = text.replace(
-              /\\[([0-9]+)\\]\\(javascript:void\\(0\\)\\)/g,
-              '$1'
+            const regexp = new RegExp(
+              '\\[([0-9]+)\\]\\(javascript:void\\(0\\)\\)',
+              'g'
             );
+            text = text.replace(regexp, '$1');
             navigator.clipboard
               .writeText(text)
               .then(() => {
@@ -4351,7 +5819,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
 
           async shareSession() {
-            const sessionContent = document.querySelector('.session-content');
+            const sessionContent = $('.session-content');
             if (!sessionContent) {
               this.showSwal({
                 title: '截图失败',
@@ -4546,7 +6014,9 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
           async sendMessage() {
             if (
-              (!this.messageInput.trim() && this.uploadedImages.length === 0) ||
+              (!this.messageInput.trim() &&
+                this.uploadedImages.length === 0 &&
+                this.uploadedPlaintexts.length === 0) ||
               !this.apiKey
             )
               return;
@@ -4581,8 +6051,18 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               }
             }
 
+            // 处理文本附件
+            var userPlaintexts = [];
+            for (var txtI = 0; txtI < this.uploadedPlaintexts.length; txtI++) {
+              userPlaintexts.push({
+                name: this.uploadedPlaintexts[txtI].name,
+                content: this.uploadedPlaintexts[txtI].content
+              });
+            }
+
             this.clearInput();
             this.clearUploadedImages(); // 清空上传的图片
+            this.clearUploadedPlaintexts(); // 清空上传的文本文件
             // 清空当前会话的草稿
             if (this.currentSession) {
               this.currentSession.draft = '';
@@ -4600,6 +6080,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               type: 'user',
               content: userMessage,
               images: userImages,
+              plaintexts: userPlaintexts,
               time: new Date().toISOString(),
               model: this.selectedModel
             };
@@ -4642,11 +6123,19 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
               if (msg.type === 'user') {
                 var content = [];
+                // 构建文本内容（包含附件）
+                var textContent = msg.content || '';
+                var plaintextsToUse = isLastUserMsg
+                  ? userPlaintexts
+                  : msg.plaintexts || [];
+                if (plaintextsToUse && plaintextsToUse.length > 0) {
+                  textContent += this.buildAttachmentContent(plaintextsToUse);
+                }
                 // 添加文本内容
-                if (msg.content && msg.content.trim()) {
+                if (textContent && textContent.trim()) {
                   content.push({
                     type: 'text',
-                    text: msg.content
+                    text: textContent
                   });
                 }
                 // 添加图片内容
@@ -4991,6 +6480,10 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               this.uploadedImages = (msg.images || [])
                 .filter(i => i && i !== 'INVALID')
                 .map(i => ({ url: i }));
+              // 恢复文本附件到上传列表
+              this.uploadedPlaintexts = (msg.plaintexts || []).map(item => {
+                return { name: item.name, content: item.content };
+              });
               // 删除从 msgIndex 开始的所有消息
               session.messages = session.messages.slice(0, msgIndex);
               // 如果删除了所有消息，重置标题和摘要
@@ -5133,6 +6626,12 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               this.uploadedImages = (lastUserMsg.images || [])
                 .filter(i => i && i !== 'INVALID')
                 .map(i => ({ url: i }));
+              // 恢复文本附件到上传列表
+              this.uploadedPlaintexts = (lastUserMsg.plaintexts || []).map(
+                item => {
+                  return { name: item.name, content: item.content };
+                }
+              );
               // 删除最后一条用户消息
               session.messages = session.messages.slice(0, lastUserMsgIdx);
               this.sendMessage();
@@ -5327,28 +6826,27 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
     </script>
   </body>
 </html>
-
-  `;
-  html = html.replace(`'$MODELS_PLACEHOLDER$'`, `'${modelIds}'`);
+`; // htmlContent FINISHED
+  htmlContent = htmlContent.replace(`'$MODELS_PLACEHOLDER$'`, `'${modelIds}'`);
   // 控制"联网搜索"复选框的显隐
   if (!tavilyKeys) {
-    html = html.replace(`"model-search-label"`, `"hidden"`);
+    htmlContent = htmlContent.replace(`"model-search-label"`, `"hidden"`);
   }
   // 替换网页标题
   if (title) {
     const regex = new RegExp(TITLE_DEFAULT, 'g');
-    html = html.replace(regex, title);
+    htmlContent = htmlContent.replace(regex, title);
   }
   // 如果模型<=10个, 则不必引入tom-select.js
   if (modelIds.split(',').length <= 10) {
-    html = html.replace(
+    htmlContent = htmlContent.replace(
       /<script[\s]*src="https:\/\/unpkg\.com\/tom-select[\s\S]{0,80}?\/script>/,
       ''
     );
-    html = html.replace(
+    htmlContent = htmlContent.replace(
       /<link[\s]*href="https:\/\/unpkg\.com\/tom-select[\s\S]{0,80}?\/>/,
       ''
     );
   }
-  return html;
+  return htmlContent;
 }
