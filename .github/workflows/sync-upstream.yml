@@ -36,7 +36,7 @@ jobs:
       - name: 添加上游仓库
         run: |
           # 替换为你的上游仓库地址
-          git remote add upstream icheer/openai-webui-lite || true
+          git remote add upstream https://github.com/icheer/openai-webui-lite || true
           git fetch upstream
       
       - name: 同步上游更改
