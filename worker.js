@@ -3779,7 +3779,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 color: #333;
               "
             >
-              ⚙️ WebDAV 配置
+              WebDAV 配置
             </label>
             <div style="margin-bottom: 12px">
               <label
@@ -4120,9 +4120,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           // 监听浏览器后退事件（移动端体验优化）
           window.addEventListener('popstate', this.handlePopState);
 
-          // 页面关闭前同步 WebDAV 数据
-          window.addEventListener('beforeunload', this.handleBeforeUnload);
-
           await this.loadData();
           if (this.sessions.length === 0) {
             this.createNewSession();
@@ -4145,7 +4142,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         beforeUnmount() {
           window.removeEventListener('resize', this.checkMobile);
           window.removeEventListener('popstate', this.handlePopState);
-          window.removeEventListener('beforeunload', this.handleBeforeUnload);
         },
         watch: {
           messageInput() {
@@ -4203,15 +4199,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               Swal.close();
               this.swalHashAdded = false;
               return;
-            }
-          },
-
-          // 页面关闭前同步 WebDAV 数据
-          handleBeforeUnload(event) {
-            // 使用 sendBeacon 或同步方式确保数据发送
-            if (window.openaiDB && window.openaiDB._pendingWebdavData) {
-              // 尝试立即同步（注意：beforeunload 中异步操作可能不会完成）
-              window.openaiDB.flushWebdavSync();
             }
           },
 
