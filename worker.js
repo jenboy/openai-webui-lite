@@ -2816,7 +2816,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               );
               if (remoteData !== null) {
                 if (window.app) {
-                  window.app.showToast('远程会话数据已加载', 'success');
+                  window.app.showToast('远程数据已加载', 'success');
                 }
                 return remoteData;
               }
