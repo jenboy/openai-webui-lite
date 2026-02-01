@@ -2815,6 +2815,9 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                 'sessions.json?v=' + timestamp
               );
               if (remoteData !== null) {
+                if (window.app) {
+                  window.app.showToast('远程会话数据已加载', 'success');
+                }
                 return remoteData;
               }
               // 如果远程没有数据，回退到本地
