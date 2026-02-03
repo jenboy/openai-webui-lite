@@ -4083,9 +4083,11 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
 
           const renderer = new marked.Renderer();
 
-          // 只重写 text，让普通文本中的 <role> 转义
+          const originalTextRenderer = renderer.text.bind(renderer);
           renderer.text = function (text) {
-            return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // marked 会自动处理代码块内的内容，这里只处理普通文本
+            const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return originalTextRenderer(escaped);
           };
 
           // 配置 marked
