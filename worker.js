@@ -5766,8 +5766,12 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
 
           copyToClipboard(text) {
-            const regexp = /\\[(\\d+)\\]\\(javascript:void\\(0\\)\\)/g;
-            text = text.replace(regexp, '\$1');
+            const regexRel = /\\[(\\d+)\\]\\(javascript:void\\(0\\)\\)/g;
+            text = text.replace(regexRel, '\$1');
+            // 将 <details class="thinking" ... 直至</detail>的内容移除
+            const regexThinking =
+              /<details class="thinking"[\\s\\S]*?<\\/details>/g;
+            text = text.replace(regexThinking, '');
             navigator.clipboard
               .writeText(text)
               .then(() => {
