@@ -932,7 +932,8 @@ function getLiteModelId(modelIds) {
     .map(i => i.split('=')[0].trim())
     .filter(i => i);
   const parts = [
-    '-v3',
+    'qwen3-next',
+    'deepseek-v',
     '-oss-',
     '-mini',
     'qwen3-max',
@@ -5727,7 +5728,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
 
           copyToClipboard(text) {
-            const regexp = /\$\$(\\d+)\$\$\$javascript:void\\(0\$\\)/g;
+            const regexp = /\\[(\\d+)\\]\\(javascript:void\\(0\\)\\)/g;
             text = text.replace(regexp, '\$1');
             navigator.clipboard
               .writeText(text)
