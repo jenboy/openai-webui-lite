@@ -5772,6 +5772,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             const regexThinking =
               /<details class="thinking"[\\s\\S]*?<\\/details>/g;
             text = text.replace(regexThinking, '');
+            text = text.trim();
             navigator.clipboard
               .writeText(text)
               .then(() => {
