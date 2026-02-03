@@ -1586,8 +1586,16 @@
           // 初始化 IndexedDB
           await window.openaiDB.init();
 
+          const renderer = new marked.Renderer();
+
+          // 只重写 text，让普通文本中的 <role> 转义
+          renderer.text = function (text) {
+            return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          };
+
           // 配置 marked
           marked.setOptions({
+            renderer,
             breaks: true, // 支持 GFM 换行
             gfm: true, // 启用 GitHub Flavored Markdown
             tables: true, // 支持表格
@@ -3519,9 +3527,7 @@
             }
 
             this.errorMessage = '';
-            var userMessage = this.messageInput
-              .trim()
-              .replace(new RegExp('<', 'g'), '&lt;');
+            var userMessage = this.messageInput.trim();
 
             // 处理图片:如果不支持URL,转为base64;否则使用URL
             var userImages = [];
