@@ -1437,7 +1437,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       
       body {
         position: relative;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
         min-height: 100vh;
         min-height: 100dvh;
@@ -2524,6 +2525,32 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         margin: 1em 0;
         padding-left: 1em;
         color: #666;
+      }
+      
+      .rendered-content details {
+        margin: 1em 0;
+        padding: 0.8em 1em;
+        background: #f8f9fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+      }
+      
+      .rendered-content details summary {
+        cursor: pointer;
+        font-weight: 500;
+        color: #555;
+        padding: 0.3em 0;
+        user-select: none;
+      }
+      
+      .rendered-content details summary:hover {
+        color: #333;
+      }
+      
+      .rendered-content details[open] summary {
+        margin-bottom: 0.5em;
+        padding-bottom: 0.5em;
+        border-bottom: 1px solid #e5e7eb;
       }
       
       .streaming-answer {
