@@ -2747,7 +2747,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               this._pendingWebdavData = null;
             }
             this._webdavSyncTimer = null;
-          }, 3000); // 3秒防抖
+          }, 5000); // 5秒防抖
         }
 
         // 立即同步到 WebDAV（用于页面关闭前等场景）

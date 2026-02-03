@@ -252,7 +252,7 @@
               this._pendingWebdavData = null;
             }
             this._webdavSyncTimer = null;
-          }, 3000); // 3秒防抖
+          }, 5000); // 5秒防抖
         }
 
         // 立即同步到 WebDAV（用于页面关闭前等场景）
@@ -1586,18 +1586,14 @@
           // 初始化 IndexedDB
           await window.openaiDB.init();
 
-          const renderer = new marked.Renderer();
-
-          const originalTextRenderer = renderer.text.bind(renderer);
-          renderer.text = function (text) {
-            // marked 会自动处理代码块内的内容，这里只处理普通文本
-            const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            return originalTextRenderer(escaped);
-          };
-
           // 配置 marked
           marked.setOptions({
-            renderer,
+            renderer: {
+              // 转义 HTML 标签，防止 XSS
+              html(html) {
+                return html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              }
+            },
             breaks: true, // 支持 GFM 换行
             gfm: true, // 启用 GitHub Flavored Markdown
             tables: true, // 支持表格
