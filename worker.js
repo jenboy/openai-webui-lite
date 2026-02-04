@@ -932,8 +932,8 @@ function getLiteModelId(modelIds) {
     .map(i => i.split('=')[0].trim())
     .filter(i => i);
   const parts = [
-    'qwen3-next',
     'deepseek-v',
+    'qwen3-next',
     '-oss-',
     '-mini',
     'qwen3-max',
@@ -1437,7 +1437,8 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       
       body {
         position: relative;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
         min-height: 100vh;
         min-height: 100dvh;
@@ -2526,6 +2527,32 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
         color: #666;
       }
       
+      .rendered-content details {
+        margin: 1em 0;
+        padding: 0.8em 1em;
+        background: #f8f9fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+      }
+      
+      .rendered-content details summary {
+        cursor: pointer;
+        font-weight: 500;
+        color: #555;
+        padding: 0.3em 0;
+        user-select: none;
+      }
+      
+      .rendered-content details summary:hover {
+        color: #333;
+      }
+      
+      .rendered-content details[open] summary {
+        padding-bottom: 0.5em;
+        margin-bottom: 0.75em;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      
       .streaming-answer {
         min-height: 1.5em;
       }
@@ -2747,7 +2774,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               this._pendingWebdavData = null;
             }
             this._webdavSyncTimer = null;
-          }, 3000); // 3秒防抖
+          }, 5000); // 5秒防抖
         }
 
         // 立即同步到 WebDAV（用于页面关闭前等场景）
@@ -4081,8 +4108,21 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           // 初始化 IndexedDB
           await window.openaiDB.init();
 
+          const renderer = new marked.Renderer();
+          const originalHtmlRenderer = renderer.html.bind(renderer);
+          renderer.html = function (text) {
+            // marked 会自动处理代码块内的内容，这里只处理普通文本
+            // 有条件的转义：如果 < 后面不是 a, br, blockquote, details, summary 标签，才进行转义
+            const escaped = text.replace(
+              /<(?!\\/?(a|br|blockquote|details|summary)[\\s>])/gi,
+              '&lt;'
+            );
+            return originalHtmlRenderer(escaped);
+          };
+
           // 配置 marked
           marked.setOptions({
+            renderer,
             breaks: true, // 支持 GFM 换行
             gfm: true, // 启用 GitHub Flavored Markdown
             tables: true, // 支持表格
@@ -4885,9 +4925,6 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               'openai_enable_search'
             ));
 
-            // 加载当前会话的草稿
-            this.loadDraftFromCurrentSession();
-
             // 加载会话数据
             const savedSessions =
               await window.openaiDB.getItem('openai_sessions');
@@ -4916,6 +4953,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               this.currentSessionId = this.sessions[0].id;
             }
             this.autoFoldRolePrompt();
+            this.loadDraftFromCurrentSession(); // 加载当前会话的草稿
 
             // 首次向用户询问 API Key
             if (!this.apiKey && this.isTotallyBlank) {
@@ -5728,8 +5766,13 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
           },
 
           copyToClipboard(text) {
-            const regexp = /\\[(\\d+)\\]\\(javascript:void\\(0\\)\\)/g;
-            text = text.replace(regexp, '\$1');
+            const regexRel = /\\[(\\d+)\\]\\(javascript:void\\(0\\)\\)/g;
+            text = text.replace(regexRel, '\$1');
+            // 将 <details class="thinking" ... 直至</detail>的内容移除
+            const regexThinking =
+              /<details class="thinking"[\\s\\S]*?<\\/details>/g;
+            text = text.replace(regexThinking, '');
+            text = text.trim();
             navigator.clipboard
               .writeText(text)
               .then(() => {
@@ -6014,9 +6057,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
             }
 
             this.errorMessage = '';
-            var userMessage = this.messageInput
-              .trim()
-              .replace(new RegExp('<', 'g'), '&lt;');
+            var userMessage = this.messageInput.trim();
 
             // 处理图片:如果不支持URL,转为base64;否则使用URL
             var userImages = [];
@@ -6300,6 +6341,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
               var reader = response.body.getReader();
               var decoder = new TextDecoder();
               var buffer = '';
+              var isInThinking = false; // 标记是否处于思考模式
 
               while (true) {
                 var readResult = await reader.read();
@@ -6323,8 +6365,40 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                         : trimmedLine.slice(5);
                       var data = JSON.parse(jsonStr);
 
+                      // 处理 reasoning_content (思考内容)
+                      if (
+                        data.choices &&
+                        data.choices[0].delta.reasoning_content
+                      ) {
+                        var reasoningDelta =
+                          data.choices[0].delta.reasoning_content;
+                        if (reasoningDelta) {
+                          var shouldScroll = !this.streamingContent;
+                          // 如果还未进入思考模式，添加开始标签
+                          if (!isInThinking) {
+                            this.streamingContent +=
+                              '<details class="thinking" open style="font-size: 0.75em">\\n<summary>思考内容</summary>\\n\\n';
+                            isInThinking = true;
+                          }
+                          this.streamingContent += reasoningDelta;
+                          if (shouldScroll) {
+                            this.scrollToBottom();
+                          }
+                        }
+                      }
+
+                      // 处理 content (正式回答)
                       if (data.choices && data.choices[0].delta.content) {
                         var delta = data.choices[0].delta.content;
+                        // 如果之前在思考模式，现在要输出正式内容了，先关闭思考块
+                        if (isInThinking) {
+                          this.streamingContent += '\\n</details>\\n\\n';
+                          this.streamingContent = this.streamingContent.replace(
+                            '<details class="thinking" open',
+                            '<details class="thinking"'
+                          );
+                          isInThinking = false;
+                        }
                         var regThinkStart = new RegExp('<think>');
                         var regThinkEnd = new RegExp('</think>');
                         delta = delta
