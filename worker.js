@@ -6401,15 +6401,26 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
                         }
                         var regThinkStart = new RegExp('<think>');
                         var regThinkEnd = new RegExp('</think>');
-                        delta = delta
-                          .replace(
-                            regThinkStart,
-                            '<blockquote style="font-size: 0.75em">'
-                          )
-                          .replace(regThinkEnd, '</blockquote>\\n');
+                        var shouldFoldThinking = false;
+                        delta = delta.replace(
+                          regThinkStart,
+                          '<details class="thinking" open style="font-size: 0.75em">\\n<summary>思考内容</summary>\\n\\n'
+                        );
+                        if (regThinkEnd.test(delta)) {
+                          delta = delta.replace(regThinkEnd, '</details>\\n');
+                          shouldFoldThinking = true;
+                        }
+
                         if (delta) {
                           var shouldScroll = !this.streamingContent;
-                          this.streamingContent += delta;
+                          var content = delta;
+                          if (shouldFoldThinking) {
+                            content = content.replace(
+                              '<details class="thinking" open',
+                              '<details class="thinking"'
+                            );
+                          }
+                          this.streamingContent += content;
                           if (shouldScroll) {
                             this.scrollToBottom();
                           }
