@@ -2382,6 +2382,7 @@ function getHtmlContent(modelIds, tavilyKeys, title) {
       }
       
       .session-content.capturing details summary::marker {
+        list-style: disc !important;
         list-style-type: disc !important;
       }
       
